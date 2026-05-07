@@ -1,242 +1,702 @@
 #!/usr/bin/env python3
 """
-Compute speedup against UAutomizer baseline results.
+Summarize Quokka result JSON files using repo-local baseline data.
 
-Speedup is defined as:
-- If the results don't match (different result for same filename): speedup = 0
-- If the results match: speedup = uautomizer_time_taken / input_time_taken
-- Final metric is the geometric mean speedup over all problems in the input JSON
+Usage:
+  python baselines/print_results.py path/to/run.json
+  python baselines/print_results.py baselines/results
 """
 
-import json
+from __future__ import annotations
+
 import argparse
-import sys
+import json
 import math
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from tabulate import tabulate
+from typing import Any, Dict, List, Optional, Sequence
 
 
-def load_json_results(file_path: str) -> List[Dict]:
-    """Load results from JSON file"""
+RESULT_SUFFIX = "_invariant_generation_results.json"
+SOLVED_RESULTS = {"TRUE", "FALSE"}
+PRINT_RESULT_ORDER = ["TRUE", "FALSE", "UNKNOWN", "TIMEOUT"]
+ASSERT_RESULT_ORDER = ["TRUE", "FALSE", "UNKNOWN", "TIMEOUT", "KILLED", "MISSING"]
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+DEFAULT_RESULTS_DIR = SCRIPT_DIR / "results"
+DEFAULT_BASELINES = {
+    "uautomizer": REPO_ROOT / "Dataset" / "timing_uautomizer.json",
+    "esbmc": REPO_ROOT / "Dataset" / "timing_esbmc.json",
+}
+
+
+@dataclass
+class RunSummary:
+    label: str
+    path: Path
+    verifier: str
+    baseline_path: Path
+    total_problems: int
+    total_samples: int
+    correct_problem_count: int
+    false_problem_count: int
+    timeout_problem_count: int
+    representative_result_counts: Dict[str, int]
+    assert_result_counts: Dict[str, int]
+    consistent_problem_count: int
+    fallback_problem_count: int
+    faster_problem_count: int
+    geometric_mean_speedup: float
+    faster_only_geometric_mean_speedup: float
+    speedups_raw: List[float]
+    correct_results: Dict[str, Dict[str, Any]]
+
+
+def load_json(path: Path) -> Any:
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        print(f"Error loading {file_path}: {e}")
-        sys.exit(1)
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        raise SystemExit(f"Missing JSON file: {path}")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Could not parse JSON in {path}: {exc}")
 
 
-def generated_invariant_correctness_and_timeout(input_result: Dict[str, List[Dict]]) -> float:
-    """
-    Print the mean % of generated invariants that are correct averaged across all samples and problems
-    """
-    correct_count = 0
-    timeout_count = 0
-    false_count = 0
-    total_count = 0
-    for filename, input_result_list in input_result.items():
-        for input_result in input_result_list:
-            if input_result['assert_verification_result'] is not None and input_result['assert_verification_result'].get('result', '') == 'TRUE':
-                correct_count += 1
-                break
-            elif input_result['assert_verification_result'] is not None and input_result['assert_verification_result'].get('result', '') == 'FALSE':
-                false_count += 1
-                break
-            if (input_result['assert_verification_result'] is not None and input_result['assert_verification_result'].get('result', '') == 'TIMEOUT') or (input_result['assume_verification_result'] is not None and input_result['assume_verification_result'].get('result', '') == 'TIMEOUT'):
-                timeout_count += 1
-                break
-        total_count += 1
-    return correct_count / total_count, timeout_count / total_count, false_count / total_count
+def canonical_result(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if value is None:
+        return "UNKNOWN"
+    result = str(value).strip().upper()
+    if result == "ERROR":
+        return "UNKNOWN"
+    return result or "UNKNOWN"
 
-def compute_speedup(input_results: Dict[str, List[Dict]], baseline_results: List[Dict]) -> Tuple[float, float, float, float, List[float], List[float], List[Tuple[float, bool]], List[Tuple[float, bool]]]:
-    """
-    Compute speedup for each problem and return geometric mean speedup with stats.
-    
-    Returns:
-        tuple: (geometric_mean_speedup, result_stats, pct_consistent, pct_consistent_and_faster, mean_speedup_consistent_and_faster, speedups, speedups_raw, timing_data, baseline_timing_data)
-        where speedups uses max(..., 1.0) for metrics, speedups_raw uses baseline_time/input_time for table/plot,
-        timing_data is a list of (time, is_solved) tuples for input results,
-        and baseline_timing_data is a list of (time, is_solved) tuples for baseline results
-    """
-    fn_key = 'filename'
-    time_key = 'time_taken'
 
-    # Create lookup dict for baseline results by filename
-    baseline_lookup = {result[fn_key]: result for result in baseline_results}
-    
-    speedups = []  # With max(..., 1.0) for metrics
-    speedups_raw = []  # Without max for table/plot
-    consistent_and_faster_speedups = []
-    result_stats = {'TRUE': 0, 'FALSE': 0, 'UNKNOWN': 0, 'TIMEOUT': 0}
-    consistent_count = 0
-    consistent_and_faster_count = 0
-    timing_data = []  # List of (time, is_solved) tuples for input results
-    baseline_timing_data = []  # List of (time, is_solved) tuples for baseline results
-    
-    total_problems = len(input_results)
-    
-    for filename, input_result_list in input_results.items():
-        for sample_result in input_result_list:
-            generation_time = sample_result.get('generation_time', 0.0)
-            assume_verification_time = sample_result.get('assume_verification_time', 0.0)
-            assert_verification_time = sample_result.get('assert_verification_time', 0.0)
-            assume_verification_result = sample_result.get('assume_verification_result')
-            assert_verification_result = sample_result.get('assert_verification_result')
-            
-            if assume_verification_time == 0.0 and assert_verification_time == 0.0:
-                sample_result['calculated_time_taken'] = 0.0
-            else:
-                # Scenario 2: If assume returns FALSE and (assert was KILLED or assume is faster/equal to assert),
-                # use assume time only since aggregated result will be FALSE
-                if (assume_verification_result is not None and 
-                    assume_verification_result.get('result') == 'FALSE' and
-                    (assert_verification_result is None or 
-                     assert_verification_result.get('result') == 'KILLED' or
-                     assume_verification_time <= assert_verification_time)):
-                    # Use assume time only (early termination scenario)
-                    sample_result['calculated_time_taken'] = assume_verification_time + generation_time
-                else:
-                    # Calculate total time for this sample: max(assume, assert) + generation
-                    sample_result['calculated_time_taken'] = max(assume_verification_time, assert_verification_time) + generation_time
-        
-        # Find matching baseline result
-        if filename not in baseline_lookup:
-            raise ValueError(f"Filename {filename} not found in baseline results")
-        
-        baseline_result = baseline_lookup[filename]
-        baseline_result_value = baseline_result['result']
-        
-        # Filter samples that are consistent with baseline
-        consistent_samples = [sample for sample in input_result_list if sample['result'] == baseline_result_value]
-        # Filter samples that are correct (assert verification TRUE)
-        correct_samples = [
-            sample for sample in input_result_list
-            if sample.get('assert_verification_result') is not None
-            and sample.get('assert_verification_result', {}).get('result') == 'TRUE'
-        ]
-        consistent_correct_samples = [
-            sample for sample in correct_samples
-            if sample.get('result') == baseline_result_value
-        ]
-        
-        # Select the sample with minimum calculated time that is consistent and fastest
-        if consistent_samples:
-            input_result = min(consistent_samples, key=lambda x: x.get('calculated_time_taken', float('inf')))
+def to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def infer_verifier(path: Path, override: str) -> str:
+    if override != "auto":
+        return override
+    match = re.search(r"verifier=([A-Za-z0-9_-]+)", path.name)
+    if match:
+        verifier = match.group(1).lower()
+        if verifier in DEFAULT_BASELINES:
+            return verifier
+    return "uautomizer"
+
+
+def parse_model_label(path: Path) -> str:
+    name = path.name
+    if name.endswith(RESULT_SUFFIX):
+        name = name[: -len(RESULT_SUFFIX)]
+    match = re.match(
+        r"(?P<model>.+?)_cot=(?P<cot>True|False)_best_of_n=(?P<best_of_n>\d+)"
+        r"_num_shots=(?P<num_shots>\d+)_temperature=(?P<temperature>[\d.]+)"
+        r"_verifier=(?P<verifier>[A-Za-z0-9_-]+)$",
+        name,
+    )
+    if not match:
+        return name
+
+    model = match.group("model")
+    extras: List[str] = []
+    if match.group("cot") == "True":
+        extras.append("CoT")
+    if match.group("best_of_n") != "1":
+        extras.append(f"n={match.group('best_of_n')}")
+    if match.group("num_shots") != "0":
+        extras.append(f"{match.group('num_shots')}-shot")
+    if match.group("temperature") != "0.0":
+        extras.append(f"t={match.group('temperature')}")
+    if match.group("verifier") != "uautomizer":
+        extras.append(match.group("verifier"))
+    if extras:
+        return f"{model} ({', '.join(extras)})"
+    return model
+
+
+def load_baseline_lookup(path: Path) -> Dict[str, Dict[str, Any]]:
+    data = load_json(path)
+    if not isinstance(data, list):
+        raise SystemExit(f"Expected baseline JSON list in {path}")
+
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for entry in data:
+        filename = entry.get("filename")
+        if not filename:
+            continue
+        lookup[filename] = {
+            "filename": filename,
+            "result": canonical_result(entry.get("result")),
+            "time_taken": to_float(entry.get("time_taken")),
+        }
+    return lookup
+
+
+def aggregate_raw_sample_result(sample: Dict[str, Any]) -> Optional[str]:
+    assume_result = sample.get("assume_verification_result")
+    assert_result = sample.get("assert_verification_result")
+    if assume_result is None or assert_result is None:
+        return None
+
+    assume_value = canonical_result(assume_result.get("result"))
+    assert_value = canonical_result(assert_result.get("result"))
+
+    if assume_value == "KILLED" or assert_value == "KILLED":
+        return "UNKNOWN"
+    if assume_value == "FALSE":
+        return "FALSE"
+    if assume_value == "TRUE" and assert_value == "TRUE":
+        return "TRUE"
+    if assert_value == "FALSE":
+        return "UNKNOWN"
+    if assume_value == "TIMEOUT" or assert_value == "TIMEOUT":
+        return "TIMEOUT"
+    return "UNKNOWN"
+
+
+def sample_total_time(sample: Dict[str, Any]) -> float:
+    generation_time = to_float(sample.get("generation_time")) or 0.0
+    assume_time = to_float(sample.get("assume_verification_time")) or 0.0
+    assert_time = to_float(sample.get("assert_verification_time")) or 0.0
+    verify_time_taken = to_float(sample.get("verify_time_taken")) or 0.0
+
+    assume_result = sample.get("assume_verification_result")
+    assert_result = sample.get("assert_verification_result")
+
+    if assume_time == 0.0 and assert_time == 0.0:
+        return generation_time + verify_time_taken
+
+    if (
+        assume_result is not None
+        and canonical_result(assume_result.get("result")) == "FALSE"
+        and (
+            assert_result is None
+            or canonical_result(assert_result.get("result")) == "KILLED"
+            or assume_time <= assert_time
+        )
+    ):
+        return generation_time + assume_time
+
+    return generation_time + max(assume_time, assert_time)
+
+
+def geometric_mean(values: Sequence[float]) -> float:
+    if not values:
+        return 1.0
+    return math.exp(sum(math.log(value) for value in values) / len(values))
+
+
+def format_fraction(numerator: int, denominator: int) -> str:
+    if denominator == 0:
+        return "0/0 (0.0%)"
+    pct = numerator / denominator * 100.0
+    return f"{numerator}/{denominator} ({pct:.1f}%)"
+
+
+def format_count_map(counts: Dict[str, int], order: Sequence[str], denominator: int) -> str:
+    parts = []
+    for key in order:
+        value = counts.get(key, 0)
+        pct = (value / denominator * 100.0) if denominator else 0.0
+        parts.append(f"{key}={value} ({pct:.1f}%)")
+    return ", ".join(parts)
+
+
+def format_speedup_thresholds(speedups_raw: Sequence[float]) -> str:
+    thresholds = [
+        (">1.0", lambda value: value > 1.0),
+        ("≥1.2", lambda value: value >= 1.2),
+        ("≥1.5", lambda value: value >= 1.5),
+        ("≥2.0", lambda value: value >= 2.0),
+    ]
+    total = len(speedups_raw)
+    parts = []
+    for label, predicate in thresholds:
+        count = sum(1 for value in speedups_raw if predicate(value))
+        pct = (count / total * 100.0) if total else 0.0
+        parts.append(f"{label}: {count}/{total} ({pct:.1f}%)")
+    return ", ".join(parts)
+
+
+def format_timeout_label(timeout: float) -> str:
+    return f"{int(timeout)}s" if int(timeout) == timeout else f"{timeout:g}s"
+
+
+def build_correct_results(results: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    """Replicate compare_models.py semantics.
+
+    A problem counts as solved by the model iff at least one sample has
+    assert_verification_result.result == TRUE. The time for that problem is the
+    minimum total time across such samples.
+    """
+    solved_results: Dict[str, Dict[str, Any]] = {}
+    for filename, samples in results.items():
+        best_time = None
+        for sample in samples:
+            assert_result = canonical_result(
+                (sample.get("assert_verification_result") or {}).get("result")
+            )
+            if assert_result != "TRUE":
+                continue
+            sample_time = sample_total_time(sample)
+            if best_time is None or sample_time < best_time:
+                best_time = sample_time
+
+        if best_time is not None and best_time > 0:
+            solved_results[filename] = {
+                "filename": filename,
+                "result": "TRUE",
+                "time_taken": best_time,
+            }
         else:
-            # if no consistent samples, select the fastest one
-            input_result = min(input_result_list, key=lambda x: x.get('calculated_time_taken', float('inf')))
+            solved_results[filename] = {
+                "filename": filename,
+                "result": "UNKNOWN",
+                "time_taken": None,
+            }
+    return solved_results
 
-        input_result_value = input_result['result']
-        input_time = input_result.get('calculated_time_taken', 0.0)
-        
-        result_stats[input_result_value] += 1
-        
-        # Track timing data: solved means TRUE or FALSE (not UNKNOWN or TIMEOUT)
-        is_solved = input_result_value in ['TRUE', 'FALSE']
-        timing_data.append((input_time, is_solved))
-        
-        # Baseline result and time (already retrieved above)
-        baseline_time = baseline_result[time_key]
-        
-        # Track baseline timing data: solved means TRUE or FALSE (not UNKNOWN or TIMEOUT)
-        baseline_is_solved = baseline_result_value in ['TRUE', 'FALSE']
-        baseline_timing_data.append((baseline_time, baseline_is_solved))
-        
-        # Count consistent results
-        if input_result_value == baseline_result_value:
-            consistent_count += 1
-        # For speedup, require correct + consistent sample
-        if consistent_correct_samples:
-            speedup_sample = min(consistent_correct_samples, key=lambda x: x.get('calculated_time_taken', float('inf')))
-            speedup_time = speedup_sample.get('calculated_time_taken', 0.0)
-            speedup_raw = baseline_time / speedup_time if speedup_time > 0 else 1.0  # Raw speedup for table/plot
-            speedup = max(speedup_raw, 1.0)  # Capped speedup for metrics
-            if speedup_raw > 1.0:
-                consistent_and_faster_count += 1
-                consistent_and_faster_speedups.append(speedup)
+
+def solved_within_timeout(
+    results: Dict[str, Dict[str, Any]], timeout: float
+) -> Dict[str, float]:
+    solved = {}
+    for filename, entry in results.items():
+        result_value = canonical_result(entry.get("result"))
+        time_taken = to_float(entry.get("time_taken"))
+        if result_value in SOLVED_RESULTS and time_taken is not None and time_taken <= timeout:
+            solved[filename] = time_taken
+    return solved
+
+
+def ensure_results_mapping(data: Any, path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    if not isinstance(data, dict):
+        raise SystemExit(
+            f"Expected Quokka result JSON in {path} to be a dict of filename -> sample list."
+        )
+
+    normalized: Dict[str, List[Dict[str, Any]]] = {}
+    for filename, samples in data.items():
+        if isinstance(samples, list):
+            normalized[filename] = [sample for sample in samples if isinstance(sample, dict)]
         else:
-            speedup = 1.0
-            speedup_raw = 1.0
-        
-        speedups.append(speedup)
-        speedups_raw.append(speedup_raw)
+            raise SystemExit(f"Expected sample list for {filename} in {path}")
+    return normalized
 
 
-    result_stats['SUCCESS'] = result_stats['TRUE'] + result_stats['FALSE'] 
-    result_stats = {k : str(round(v / total_problems * 100, 2)) + '%' for k, v in result_stats.items()}
-    
-    # Compute geometric mean for speedups
-    if speedups:
-        # Geometric mean = (product of all values)^(1/n)
-        # Use log space to avoid overflow: exp(mean(log(values)))
-        log_speedups = [math.log(speedup) for speedup in speedups]
-        mean_speedup = math.exp(sum(log_speedups) / len(log_speedups))
-    else:
-        mean_speedup = 1.0
-    
-    if consistent_and_faster_speedups:
-        log_consistent_speedups = [math.log(speedup) for speedup in consistent_and_faster_speedups]
-        mean_speedup_consistent_and_faster = math.exp(sum(log_consistent_speedups) / len(log_consistent_speedups))
-    else:
-        mean_speedup_consistent_and_faster = 1.0
-    pct_consistent = (consistent_count / total_problems) * 100 if total_problems > 0 else 0.0
-    pct_consistent_and_faster = (consistent_and_faster_count / total_problems) * 100 if total_problems > 0 else 0.0
-    return mean_speedup, result_stats, pct_consistent, pct_consistent_and_faster, mean_speedup_consistent_and_faster, speedups, speedups_raw, timing_data, baseline_timing_data
+def summarize_run(path: Path, baseline_override: Optional[Path], verifier_override: str) -> RunSummary:
+    verifier = infer_verifier(path, verifier_override)
+    baseline_path = baseline_override or DEFAULT_BASELINES[verifier]
+    baseline_lookup = load_baseline_lookup(baseline_path)
+    results = ensure_results_mapping(load_json(path), path)
+
+    missing = sorted(set(results) - set(baseline_lookup))
+    if missing:
+        preview = ", ".join(missing[:5])
+        suffix = "" if len(missing) <= 5 else f", ... ({len(missing)} missing)"
+        raise SystemExit(
+            f"Results in {path} reference files not found in {baseline_path}: {preview}{suffix}"
+        )
+
+    representative_result_counts = {key: 0 for key in PRINT_RESULT_ORDER}
+    assert_result_counts = {key: 0 for key in ASSERT_RESULT_ORDER}
+    speedups = []
+    faster_only_speedups = []
+    speedups_raw = []
+    correct_problem_count = 0
+    false_problem_count = 0
+    timeout_problem_count = 0
+    consistent_problem_count = 0
+    fallback_problem_count = 0
+    faster_problem_count = 0
+    total_samples = 0
+
+    for filename, samples in sorted(results.items()):
+        baseline_entry = baseline_lookup[filename]
+        baseline_result = baseline_entry["result"]
+        baseline_time = baseline_entry["time_taken"]
+
+        total_samples += len(samples)
+
+        if any(
+            canonical_result((sample.get("assert_verification_result") or {}).get("result")) == "TRUE"
+            for sample in samples
+        ):
+            correct_problem_count += 1
+        if any(
+            canonical_result((sample.get("assert_verification_result") or {}).get("result")) == "FALSE"
+            for sample in samples
+        ):
+            false_problem_count += 1
+        if any(
+            canonical_result((sample.get("assume_verification_result") or {}).get("result")) == "TIMEOUT"
+            or canonical_result((sample.get("assert_verification_result") or {}).get("result")) == "TIMEOUT"
+            for sample in samples
+        ):
+            timeout_problem_count += 1
+
+        for sample in samples:
+            assert_result = sample.get("assert_verification_result")
+            assert_key = (
+                canonical_result(assert_result.get("result"))
+                if assert_result is not None
+                else "MISSING"
+            )
+            if assert_key not in assert_result_counts:
+                assert_result_counts[assert_key] = 0
+            assert_result_counts[assert_key] += 1
+
+        consistent_samples = [
+            sample
+            for sample in samples
+            if canonical_result(sample.get("result")) == baseline_result
+        ]
+        representative = min(
+            consistent_samples or samples,
+            key=sample_total_time,
+        )
+        representative_result = canonical_result(representative.get("result"))
+        representative_result_counts.setdefault(representative_result, 0)
+        representative_result_counts[representative_result] += 1
+
+        raw_representative_result = aggregate_raw_sample_result(representative)
+        if representative_result == baseline_result:
+            consistent_problem_count += 1
+            if raw_representative_result not in SOLVED_RESULTS:
+                fallback_problem_count += 1
+
+        verified_consistent_samples = [
+            sample
+            for sample in samples
+            if canonical_result(sample.get("result")) == baseline_result
+            and canonical_result((sample.get("assert_verification_result") or {}).get("result")) == "TRUE"
+        ]
+
+        if verified_consistent_samples and baseline_time and baseline_time > 0:
+            best_verified_sample = min(verified_consistent_samples, key=sample_total_time)
+            verified_time = sample_total_time(best_verified_sample)
+            raw_speedup = baseline_time / verified_time if verified_time > 0 else 1.0
+            capped_speedup = max(raw_speedup, 1.0)
+            if raw_speedup > 1.0:
+                faster_problem_count += 1
+                faster_only_speedups.append(capped_speedup)
+            speedups.append(capped_speedup)
+            speedups_raw.append(raw_speedup)
+        else:
+            speedups.append(1.0)
+            speedups_raw.append(1.0)
+
+    correct_results = build_correct_results(results)
+
+    return RunSummary(
+        label=parse_model_label(path),
+        path=path,
+        verifier=verifier,
+        baseline_path=baseline_path,
+        total_problems=len(results),
+        total_samples=total_samples,
+        correct_problem_count=correct_problem_count,
+        false_problem_count=false_problem_count,
+        timeout_problem_count=timeout_problem_count,
+        representative_result_counts=representative_result_counts,
+        assert_result_counts=assert_result_counts,
+        consistent_problem_count=consistent_problem_count,
+        fallback_problem_count=fallback_problem_count,
+        faster_problem_count=faster_problem_count,
+        geometric_mean_speedup=geometric_mean(speedups),
+        faster_only_geometric_mean_speedup=geometric_mean(faster_only_speedups),
+        speedups_raw=speedups_raw,
+        correct_results=correct_results,
+    )
 
 
+def print_single_run(summary: RunSummary) -> None:
+    print(f"Run: {summary.path}")
+    print(f"Label: {summary.label}")
+    print(f"Verifier baseline: {summary.baseline_path}")
+    print(f"Problems: {summary.total_problems}")
+    print(f"Samples: {summary.total_samples}")
+    print()
+    print("Synthesized invariants")
+    print(
+        "  Problems with at least one verifier-confirmed invariant "
+        f"(assert=TRUE): {format_fraction(summary.correct_problem_count, summary.total_problems)}"
+    )
+    print(
+        "  Problems with at least one verifier-rejected invariant "
+        f"(assert=FALSE): {format_fraction(summary.false_problem_count, summary.total_problems)}"
+    )
+    print(
+        "  Problems with any assume/assert timeout: "
+        f"{format_fraction(summary.timeout_problem_count, summary.total_problems)}"
+    )
+    print(
+        "  Sample assert-result distribution: "
+        f"{format_count_map(summary.assert_result_counts, ASSERT_RESULT_ORDER, summary.total_samples)}"
+    )
+    print()
+    print("Best-of-N outcomes")
+    print(
+        "  Representative result distribution: "
+        f"{format_count_map(summary.representative_result_counts, PRINT_RESULT_ORDER, summary.total_problems)}"
+    )
+    print(
+        "  Problems consistent with the baseline: "
+        f"{format_fraction(summary.consistent_problem_count, summary.total_problems)}"
+    )
+    print(
+        "  Consistent problems using baseline fallback "
+        "(raw assume/assert result not definitive): "
+        f"{format_fraction(summary.fallback_problem_count, summary.total_problems)}"
+    )
+    print()
+    print("Speedup vs baseline")
+    print(
+        "  Geometric mean speedup: "
+        f"{summary.geometric_mean_speedup:.3f}x"
+    )
+    print(
+        "  Geometric mean speedup on faster verified samples only: "
+        f"{summary.faster_only_geometric_mean_speedup:.3f}x"
+    )
+    print(
+        "  Problems with verified speedup >1.0x: "
+        f"{format_fraction(summary.faster_problem_count, summary.total_problems)}"
+    )
+    print(
+        "  Verified speedup thresholds: "
+        f"{format_speedup_thresholds(summary.speedups_raw)}"
+    )
+    print()
+    print(
+        "Note: speedup only credits samples whose top-level result matches the baseline and "
+        "whose assert check returned TRUE. Final top-level results may still match the baseline "
+        "via Quokka's fallback when assume/assert returns UNKNOWN or TIMEOUT."
+    )
 
-def main():
-    """Main function"""
-    parser = argparse.ArgumentParser(description='Compute speedup against UAutomizer baseline')
-    parser.add_argument('input', type=str, help='Input JSON file to compare')
-    args = parser.parse_args()
-    
-    
-    baseline = str(Path(__file__).parent.resolve()) + "/../Dataset/timing_uautomizer.json"
-    
-    input_results = load_json_results(args.input)
-    baseline_results = load_json_results(baseline)
-    
-    pct_correct_invariants, pct_timeout_invariants, pct_false_invariants = generated_invariant_correctness_and_timeout(input_results) 
-    pct_correct_invariants = pct_correct_invariants * 100
-    pct_timeout_invariants = pct_timeout_invariants * 100
-    pct_false_invariants = pct_false_invariants * 100
-    print(f"\n\n% of generated invariants that are correct across all problems and samples: {pct_correct_invariants:.1f}%\n\n")
-    print(f"\n\n% of generated invariants that are false across all problems and samples: {pct_false_invariants:.1f}%\n\n")
-    print(f"\n\n% of generated invariants that timed out across all problems and samples: {pct_timeout_invariants:.1f}%\n\n")
-    
-    # Compute speedup
-    mean_speedup, result_stats, pct_consistent, pct_consistent_and_faster, mean_speedup_consistent_and_faster, speedups, speedups_raw, timing_data, baseline_timing_data = compute_speedup(input_results, baseline_results)
-    
-    # Print final results
-    print(f'##### Best-of-N results #####')
-    print(f"Geometric mean speedup: {mean_speedup:.3f}x ({len(input_results)} problems)")
-    print(f"Geometric mean speedup (consistent and faster only): {mean_speedup_consistent_and_faster:.3f}x")
-    print(f"% of each verification result across all problems: {result_stats}")
-    print(f"% problems consistent with baseline: {pct_consistent:.1f}%")
-    print(f"% problems consistent and faster: {pct_consistent_and_faster:.1f}%")
-    
-    # Calculate counts for different speedup thresholds (using raw speedups for table/plot)
-    # Note: >1.0 means strictly faster, ≥ for other thresholds
-    thresholds = [1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
-    threshold_labels = ['>1.0', '≥1.2', '≥1.4', '≥1.6', '≥1.8', '≥2.0']
-    counts = []
-    for i, threshold in enumerate(thresholds):
-        if i == 0:  # Strictly greater than 1.0
-            count = sum(1 for s in speedups_raw if s > threshold)
-        else:  # Greater than or equal for all others
-            count = sum(1 for s in speedups_raw if s >= threshold)
-        counts.append(count)
-    
-    # Create and print table
-    table_data = [[label, count, f"{count/len(speedups)*100:.1f}%"] for label, count in zip(threshold_labels, counts)]
-    print(f'\n##### Speedup Distribution Table #####')
-    print(tabulate(table_data, headers=['Speedup Threshold', 'Number of Instances', 'Percentage'], tablefmt='grid'))
+
+def format_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+
+    def format_row(row: Sequence[str]) -> str:
+        return "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+
+    lines = [format_row(headers), format_row(["-" * width for width in widths])]
+    lines.extend(format_row(row) for row in rows)
+    return "\n".join(lines)
+
+
+def compare_model_rows(
+    summaries: Sequence[RunSummary], timeouts: Sequence[float]
+) -> tuple[int, str, List[List[str]]]:
+    if not summaries:
+        return 0, "baseline", []
+
+    baseline_lookup = load_baseline_lookup(summaries[0].baseline_path)
+    total_instances = len(baseline_lookup)
+    baseline_solved_sets = {
+        timeout: solved_within_timeout(baseline_lookup, timeout) for timeout in timeouts
+    }
+    baseline_label = summaries[0].baseline_path.stem
+
+    rows: List[List[str]] = []
+    for summary in sorted(summaries, key=lambda item: (item.correct_problem_count, item.label)):
+        row = [summary.label, str(summary.correct_problem_count)]
+        model_solved_sets = {
+            timeout: solved_within_timeout(summary.correct_results, timeout)
+            for timeout in timeouts
+        }
+        for timeout in timeouts:
+            solved = model_solved_sets[timeout]
+            baseline_solved = baseline_solved_sets[timeout]
+            extra = len(set(solved) - set(baseline_solved))
+            solved_count = len(solved)
+            unsolved_count = total_instances - solved_count
+            solved_time_sum = sum(solved.values())
+            par = (
+                (solved_time_sum + unsolved_count * timeout) / total_instances
+                if total_instances
+                else 0.0
+            )
+            row.extend([str(extra), str(solved_count), f"{par:.1f}"])
+        rows.append(row)
+
+    return total_instances, baseline_label, rows
+
+
+def print_compare_models_summary(summaries: Sequence[RunSummary], timeouts: Sequence[float]) -> None:
+    total_instances, baseline_label, rows = compare_model_rows(summaries, timeouts)
+    headers = ["Model", "#Corr"]
+    for timeout in timeouts:
+        label = format_timeout_label(timeout)
+        headers.extend([f"#Ext@{label}", f"#Slv@{label}", f"PAR@{label}"])
+
+    print(f"Total instances ({baseline_label}): {total_instances}")
+    print()
+    print(format_table(headers, rows))
+
+
+def print_compare_models_latex(
+    summaries: Sequence[RunSummary],
+    timeouts: Sequence[float],
+    caption: str,
+    label: str,
+) -> None:
+    total_instances, _, rows = compare_model_rows(summaries, timeouts)
+    _ = total_instances
+
+    print()
+    print("\\begin{table*}[!tb]")
+    print("  \\centering")
+    print("  \\scriptsize")
+    print("  \\renewcommand{\\arraystretch}{1.2}")
+    print("  \\setlength{\\tabcolsep}{2pt}")
+    col_spec = "p{4.5cm}r" + ("ccc" * len(timeouts))
+    print(f"  \\begin{{tabular}}{{{col_spec}}}")
+    print("    \\toprule")
+
+    top = "    \\multirow{2}{*}{\\textbf{Model}} & \\multirow{2}{*}{\\textbf{\\#Corr.}}"
+    for timeout in timeouts:
+        top += f" & \\multicolumn{{3}}{{c}}{{\\textbf{{{format_timeout_label(timeout)}}}}}"
+    top += " \\\\"
+    print(top)
+
+    cmidrule = "   "
+    col = 3
+    for _ in timeouts:
+        cmidrule += f" \\cmidrule(lr){{{col}-{col + 2}}}"
+        col += 3
+    print(cmidrule)
+
+    sub = "    &"
+    for _ in timeouts:
+        sub += " & \\#Extra & \\#Solved & $\\bar{T}$"
+    sub += " \\\\"
+    print(sub)
+    print("    \\midrule")
+
+    for row in rows:
+        latex_row = "    " + " & ".join(row) + " \\\\"
+        print(latex_row)
+
+    print("    \\bottomrule")
+    print("  \\end{tabular}")
+    print(f"  \\caption{{{caption}}}")
+    print(f"  \\label{{{label}}}")
+    print("\\end{table*}")
+
+
+def collect_result_files(path: Path) -> List[Path]:
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        raise SystemExit(f"Path does not exist: {path}")
+
+    files = sorted(path.glob(f"*{RESULT_SUFFIX}"))
+    if files:
+        return files
+
+    files = sorted(candidate for candidate in path.glob("*.json") if candidate.is_file())
+    if not files:
+        raise SystemExit(f"No JSON result files found in {path}")
+    return files
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Summarize Quokka result JSON files using compare_models-style metrics."
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_RESULTS_DIR),
+        help="Result JSON file or directory of result JSON files (default: baselines/results).",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help="Override the baseline JSON path. By default this uses Dataset/timing_<verifier>.json.",
+    )
+    parser.add_argument(
+        "--verifier",
+        choices=["auto", "uautomizer", "esbmc"],
+        default="auto",
+        help="Baseline verifier to use when it cannot be inferred from the result filename.",
+    )
+    parser.add_argument(
+        "--timeouts",
+        type=float,
+        nargs="+",
+        default=[30, 500],
+        help="Timeout thresholds used for #Extra, #Solved, and PAR reporting.",
+    )
+    parser.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Also print the single-run diagnostic summary for each result file.",
+    )
+    parser.add_argument(
+        "--latex",
+        action="store_true",
+        help="Also print a LaTeX table with the compare_models-style summary.",
+    )
+    parser.add_argument(
+        "--caption",
+        type=str,
+        default=(
+            "Model comparison: correct invariants, extra solved instances over the baseline, "
+            "and PAR time."
+        ),
+        help="Caption used with --latex.",
+    )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default="tab:model_comparison",
+        help="LaTeX label used with --latex.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    path = Path(args.path).resolve()
+    baseline_override = Path(args.baseline).resolve() if args.baseline else None
+    timeouts = sorted(args.timeouts)
+    result_files = collect_result_files(path)
+    summaries = [
+        summarize_run(result_file, baseline_override, args.verifier)
+        for result_file in result_files
+    ]
+
+    print_compare_models_summary(summaries, timeouts)
+
+    if args.latex:
+        print_compare_models_latex(summaries, timeouts, args.caption, args.label)
+
+    if args.detailed:
+        for index, summary in enumerate(summaries):
+            print()
+            if index > 0:
+                print("=" * 80)
+                print()
+            print_single_run(summary)
+
 
 if __name__ == "__main__":
-    main() 
+    main()
