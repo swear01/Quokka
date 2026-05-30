@@ -13,6 +13,8 @@ import json
 import re
 import tempfile
 import yaml
+import hashlib
+import logging
 import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -26,7 +28,6 @@ import random
 # Add the current directory to Python path to import inference.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from inference import get_client
-from sglang.utils import terminate_process, wait_for_server, launch_server_cmd
 
 
 def get_uautomizer_path() -> str:
@@ -93,12 +94,15 @@ class BatchInvariantProcessor:
     def __init__(self, c_files_dir: str, output_file: str, timeout: int, 
                  max_workers: int = 8, client=None, prompts=None, 
                  enable_cot: bool = False,
-                 max_new_tokens: int = 2048, temperature: float = 0.0,
+                 max_new_tokens: int = 8192, temperature: float = 0.0,
                  best_of_n: int = 1,
                  server_process=None, verifier: str = 'uautomizer',
                  test_gt_invariants: bool = False,
                  reload_results_file: Optional[str] = None,
-                 num_shots: int = 0
+                 num_shots: int = 0,
+                 reasoning_mode: Optional[str] = None,
+                 bon_schedule: str = "sequential",
+                 bon_parallelism: int = 8,
                  ):
         self.c_files_dir = c_files_dir
         self.output_file = output_file
@@ -115,6 +119,9 @@ class BatchInvariantProcessor:
         self.test_gt_invariants = test_gt_invariants
         self.reload_results_file = reload_results_file
         self.num_shots = num_shots
+        self.reasoning_mode = reasoning_mode
+        self.bon_schedule = bon_schedule
+        self.bon_parallelism = bon_parallelism
         
         # Thread-safe result storage - changed to dict of lists
         self.results = {}  # filename -> list of sample results
@@ -411,10 +418,16 @@ class BatchInvariantProcessor:
             messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_new_tokens,
-            n=self.best_of_n, enable_thinking=self.enable_cot
+            n=self.best_of_n,
+            enable_thinking=self.enable_cot,
+            reasoning_mode=self.reasoning_mode,
+            bon_schedule=self.bon_schedule,
+            bon_parallelism=self.bon_parallelism,
         )
         end_time = time.time()
         total_generation_time = end_time - start_time
+        # Capture detailed timing from client if available
+        timing_meta = getattr(self.client, 'last_timing', {})
         # Calculate per-sample time (for individual sample tracking)
         # Safety check: ensure best_of_n is at least 1 to avoid division by zero
         generation_time_per_sample = total_generation_time / max(self.best_of_n, 1)
@@ -835,6 +848,7 @@ class BatchInvariantProcessor:
         # Cleanup SGLang server after generation phase since it's no longer needed
         if self.server_process:
             print("🧹 Cleaning up LLM server after generation phase...", flush=True)
+            from sglang.utils import terminate_process
             terminate_process(self.server_process)
             self.server_process = None
         
@@ -896,6 +910,9 @@ class BatchInvariantProcessor:
             results = self.aggregate_file_results(c_file)
             with self.results_lock:
                 self.results[c_file] = results
+            
+            # Incremental save after each benchmark completes
+            save_results(self.results, self.output_file)
             
             # Find best result for logging (minimum overall time)
             def calc_total_time(r):
@@ -1194,10 +1211,22 @@ def create_messages(c_code_with_line_numbers, prompts, enable_cot=False, num_sho
             "content": few_shot_example["response"]
         })
     
+    # Stable prefix: everything before the final user message (system_prompt + few-shot examples)
+    # Suffix: the final user message content (program + points, stable per benchmark)
+    final_content = system_prompt + '\n\n' + user_prompt.replace("{PROGRAM}", c_code_with_line_numbers).replace("{POINTS}", points_text)
     messages.append({
         "role": "user",
-        "content": system_prompt + '\n\n' + user_prompt.replace("{PROGRAM}", c_code_with_line_numbers).replace("{POINTS}", points_text)
+        "content": final_content
     })
+
+    # Log cache prefix hash for instrumentation
+    prefix_text = json.dumps(messages[:-1], sort_keys=True, ensure_ascii=False) if messages[:-1] else ""
+    full_text = json.dumps(messages, sort_keys=True, ensure_ascii=False)
+    logging.getLogger(__name__).info(
+        f"[CachePrefix] prefix_chars={len(prefix_text)} suffix_chars={len(final_content)} "
+        f"prefix_sha256={hashlib.sha256(prefix_text.encode('utf-8')).hexdigest()[:16]} "
+        f"prompt_sha256={hashlib.sha256(full_text.encode('utf-8')).hexdigest()[:16]}"
+    )
 
     return messages
 
@@ -1693,8 +1722,8 @@ def main():
     ### generation args
     parser.add_argument('--enable_cot', action='store_true', default=False,
                         help='Use Chain-of-Thought (CoT) versions of prompts (default: False)')
-    parser.add_argument('--max_new_tokens', type=int, default=8192,
-                        help='Maximum number of new tokens to generate (default: 8192)')
+    parser.add_argument('--max_new_tokens', type=int, default=None,
+                        help='Maximum number of new tokens to generate (default: None = no limit)')
     parser.add_argument('--temperature', type=float, default=0.0,
                         help='Temperature for generation (default: 0.0)')
     parser.add_argument('--best_of_n', type=int, default=1,
@@ -1707,11 +1736,27 @@ def main():
                         help='Path to a previous results JSON file to reload invariants from (skips generation phase, default: None)')
     parser.add_argument('--num_shots', type=int, default=0,
                         help='Number of few-shot examples to include (default: 0)')
+    parser.add_argument('--benchmark_dir', type=str, default=None,
+                        help='Custom benchmark directory (default: Dataset/evaluation_all)')
+    parser.add_argument('--reasoning_mode', type=str, default=None, choices=['on', 'off'],
+                        help='Reasoning mode for supported models (default: API default)')
+    parser.add_argument('--bon_schedule', type=str, default='sequential',
+                        choices=['sequential', 'one_prime_parallel'],
+                        help='Best-of-N scheduling: sequential or one_prime_parallel (default: sequential)')
+    parser.add_argument('--bon_parallelism', type=int, default=8,
+                        help='Max parallel workers for one_prime_parallel schedule (default: 8)')
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Custom output directory for results (default: baselines/results/)')
+    parser.add_argument('--resume', action='store_true', default=False,
+                        help='Resume from existing result file, skip completed benchmarks')
     args = parser.parse_args()
     
-    # Configuration - all C files from evaluation_all
+    # Configuration - all C files from evaluation_all (or custom benchmark_dir)
     script_dir = Path(__file__).parent.resolve()
-    c_files_dir = str((script_dir / "../Dataset/evaluation_all").resolve())
+    if args.benchmark_dir:
+        c_files_dir = str(Path(args.benchmark_dir).resolve())
+    else:
+        c_files_dir = str((script_dir / "../Dataset/evaluation_all").resolve())
     
     if args.test_gt_invariants:
         model_short_name = "gt_invariants"
@@ -1719,9 +1764,28 @@ def main():
         model_short_name = args.model_name.split('/')[-1]
     
     # Generate output file based on model name
-    results_dir = script_dir / "results"
+    if args.output_dir:
+        results_dir = Path(args.output_dir).resolve()
+    else:
+        results_dir = script_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     output_file = str(results_dir / f"{model_short_name}_cot={args.enable_cot}_best_of_n={args.best_of_n}_num_shots={args.num_shots}_temperature={args.temperature}_verifier={args.verifier}_invariant_generation_results.json")
+
+    # Resume: load existing results and skip completed benchmarks
+    completed_benchmarks = set()
+    resume_prev_file = None
+    if args.resume and os.path.exists(output_file):
+        print(f"🔄 Resuming from: {output_file}", flush=True)
+        try:
+            with open(output_file, 'r') as f:
+                existing = json.load(f)
+            completed_benchmarks = set(existing.keys())
+            print(f"📋 Already completed: {len(completed_benchmarks)} benchmarks", flush=True)
+            # Rename old file so incremental saves don't overwrite it
+            resume_prev_file = output_file.replace('.json', '_prev.json')
+            os.rename(output_file, resume_prev_file)
+        except Exception as e:
+            print(f"⚠️  Could not load resume file: {e}", flush=True)
 
     timeout = 600  # 600 seconds timeout (10 minutes)
     
@@ -1763,6 +1827,7 @@ def main():
         # Initialize the SGLang client (skip if using GT invariants or reloading results)
         if not args.test_gt_invariants and not args.reload_results:
             if args.inference_client == 'sglang':
+                from sglang.utils import launch_server_cmd, wait_for_server
                 print("🤖 Initializing LLM client...", flush=True)
                 command_str = f"python -m sglang.launch_server --model-path {args.model_name} --host 0.0.0.0" 
                 if '30B-A3B' in args.model_name:
@@ -1799,7 +1864,12 @@ def main():
         
         # Find C files
         c_files = find_c_files(c_files_dir, args.num_problems, args.test_gt_invariants, available_gt_files)
-        print(f"📋 Found {len(c_files)} C files", flush=True)
+        
+        # Skip completed benchmarks when resuming
+        if completed_benchmarks:
+            c_files = [f for f in c_files if f not in completed_benchmarks]
+        
+        print(f"📋 Found {len(c_files)} C files ({len(completed_benchmarks)} already completed)", flush=True)
         
         if not c_files:
             print("❌ No C files found in the directory", flush=True)
@@ -1824,17 +1894,50 @@ def main():
             verifier=args.verifier,
             test_gt_invariants=args.test_gt_invariants,
             reload_results_file=args.reload_results,
-            num_shots=args.num_shots
+            num_shots=args.num_shots,
+            reasoning_mode=args.reasoning_mode,
+            bon_schedule=args.bon_schedule,
+            bon_parallelism=args.bon_parallelism,
         )
         
         # Run two-phase processing:
         # - Phase 1: Generate invariants for all files in parallel
         # - Phase 2: Verify files sequentially (samples within each file run in parallel)
+        
+        # Load existing results into processor if resuming (so incremental saves include them)
+        if completed_benchmarks and args.resume:
+            with open(output_file, 'r') as f:
+                existing = json.load(f)
+            # Convert raw dicts back into InvariantGenerationResult if needed, or just store
+            # For incremental saving, we just need the keys; save_results handles the merge
+            for fname in completed_benchmarks:
+                processor.results[fname] = []  # Placeholder, will be overwritten by merge
+        
         processor.run_two_phase_processing(c_files)
+        
+        # Merge with previously completed results if resuming
+        if completed_benchmarks and args.resume:
+            with open(output_file, 'r') as f:
+                existing = json.load(f)
+            # Existing entries are already in the output file; processor.results has the new ones
+            # save_results will write processor.results which includes both
         
         
         # Save final results
         save_results(processor.results, output_file)
+        
+        # Merge with previously completed results if resuming
+        if resume_prev_file and os.path.exists(resume_prev_file):
+            with open(output_file, 'r') as f:
+                new_results = json.load(f)
+            with open(resume_prev_file, 'r') as f:
+                prev_results = json.load(f)
+            merged = dict(prev_results)
+            merged.update(new_results)
+            with open(output_file, 'w') as f:
+                json.dump(merged, f, indent=2, ensure_ascii=False)
+            os.remove(resume_prev_file)
+            print(f"📋 Merged: {len(merged)} total benchmarks", flush=True)
         
         # Print summary
         print_summary(processor.results)
@@ -1871,6 +1974,7 @@ def main():
         # Cleanup SGLang server if it still exists
         if server_process:
             print("🧹 Cleaning up LLM server...", flush=True)
+            from sglang.utils import terminate_process
             terminate_process(server_process)
 
 if __name__ == "__main__":

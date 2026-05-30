@@ -1,3 +1,8 @@
 .DS_Store
 tools/
+tools/jvm/
 baselines/results/
+.venv/
+__pycache__/
+*.pyc
+.env
