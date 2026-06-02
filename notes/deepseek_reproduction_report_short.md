@@ -23,7 +23,7 @@ We reproduced the Quokka / InvBench artifact for LLM-based loop invariant synthe
 | DeepSeek temp=0.2 | 703 | 48 | 11.4s | 3 | 102.0s |
 | DeepSeek temp=0.7 | 691 | 59 | 13.1s | 3 | 111.6s |
 
-**temp=0.2 is the best single-pass setting.** It nearly matches gpt-5.2 on `#Corr` (−1%) and is substantially better on short-timeout metrics. temp=0.7 has higher `#Ext@30s` but lower `#Corr` and worse PAR. Temperature is not monotonic.
+**temp=0.2 is the best single-pass setting.** It nearly matches gpt-5.2 on `#Corr` (−1%) and is substantially better on short-timeout metrics. Of the three `#Ext@500s` cases, two are clean speedups and one (`bresenham`) is a timeout/reporting artifact. temp=0.7 has higher `#Ext@30s` but lower `#Corr` and worse PAR. Temperature is not monotonic.
 
 ## Adaptive Two-Stage
 

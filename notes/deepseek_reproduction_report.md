@@ -18,7 +18,7 @@ We reproduced the Quokka / InvBench artifact for LLM-based loop invariant synthe
 | `#Ext@500s` | 1 | 3 |
 | `PAR@500s` | 105.1s | 102.0s |
 
-DeepSeek is close on `#Corr` (−1%), substantially better on short-timeout metrics (`#Ext@30s`: 48 vs 21, `PAR@30s`: 11.4s vs 22.2s), and roughly tied at the 500s timeout. Temperature 0.7 is not uniformly better: it improves `#Ext@30s` to 59 but reduces `#Corr` to 691 and worsens PAR. An adaptive two-stage pass (temp=0.2 full run + targeted temp=0.7 rescue on previously failed cases) raises combined `#Corr` to 754/866, but this is not a single-pass comparison.
+DeepSeek is close on `#Corr` (−1%), substantially better on short-timeout metrics (`#Ext@30s`: 48 vs 21, `PAR@30s`: 11.4s vs 22.2s), and roughly tied at the 500s timeout. One of the three `#Ext@500s` cases was later classified as a timeout/reporting artifact (`bresenham`) and is not used as a qualitative success example. Temperature 0.7 is not uniformly better: it improves `#Ext@30s` to 59 but reduces `#Corr` to 691 and worsens PAR. An adaptive two-stage pass (temp=0.2 full run + targeted temp=0.7 rescue on previously failed cases) raises combined `#Corr` to 754/866, but this is not a single-pass comparison.
 
 **This comparison is not model-only.** The paper's gpt-5.2 row appears to use N=2, while our DeepSeek runs use N=16 with cache-aware separate calls and explicit non-reasoning mode. Sampling budget, temperature, and serving behavior all affect the measured outcome.
 
@@ -165,7 +165,7 @@ Higher temperature increases sample diversity, which can find stronger invariant
 Using official metrics (temp=0.2):
 
 - `#Ext@30s = 48`: DeepSeek solves 48 benchmarks at 30s that the baseline does not solve at 30s.
-- `#Ext@500s = 3`: DeepSeek solves 3 benchmarks at 500s that the baseline does not solve at 500s.
+- `#Ext@500s = 3` under the official script. Qualitatively, two of the three are clean timeout-budget speedups (`prodbin-ll_valuebound50_1.c`, `egcd2_2.c`), while the third (`bresenham-ll_unwindbound10_2.c`) is a timeout/reporting artifact caused by unsupported non-linear arithmetic in UAutomizer and an unvalidated DeepSeek invariant. Therefore, only two should be used as clean qualitative case studies.
 
 Using temp=0.7:
 
@@ -201,6 +201,16 @@ The full extension and regression lists are reported in `notes/deepseek_full_ext
 
 - **11 extensions:** Benchmarks where the baseline did not solve but DeepSeek found a verifier-confirmed invariant. Cases involving baseline-FALSE require separate semantic inspection — an invariant accepted on a FALSE-baseline program may prove a different property than the original assertion.
 - **48 regressions:** Benchmarks where the baseline solved but all DeepSeek invariants were rejected. These cluster in specific families (Cohen cube `*_9` variants, extended GCD variants, power-series variants).
+
+### Bresenham Semantic Audit
+
+The `bresenham-ll_unwindbound10_2.c` case was audited separately because it showed a baseline FALSE vs DeepSeek assert-TRUE discrepancy, and because it is one of only three `#Ext@500s` cases. The full audit is at `notes/deepseek_bresenham_semantic_audit.md`.
+
+**Key findings:**
+1. The baseline `FALSE` label was caused by repeated `Unsupported non-linear arithmetic` failures in UAutomizer's CEGAR loop, not by a genuine counterexample. The verifier timed out after 49 iterations.
+2. The DeepSeek assert query (`assume(v == 2*Y*x - 2*X*y + 2*Y - X)`) returned TRUE, but the corresponding assume query returned FALSE — the verifier could not independently prove the invariant is inductive (same non-linear arithmetic limitation).
+3. An assert TRUE under an unvalidated assumption does not constitute a sound proof.
+4. **Classification:** `timeout/reporting artifact`. The case is mechanically counted in official `#Ext@500s` but is not used as a qualitative success example.
 
 ---
 
@@ -274,6 +284,6 @@ python baselines/batch_invariant_generation.py \
 
 ## 15. Conclusion
 
-This reproduction shows that replacing the Quokka / InvBench inference backend with DeepSeek V4 Pro produces results competitive with the paper-reported gpt-5.2 row under official Quokka metrics. The best single-pass DeepSeek setting, temperature 0.2 with non-reasoning N=16, achieves `#Corr=703/866`, close to gpt-5.2's `710/866`, while improving short-timeout metrics (`#Ext@30s=48` vs 21, `PAR@30s=11.4s` vs 22.2s). Temperature 0.7 is not uniformly better: it improves `#Ext@30s` but reduces `#Corr` and worsens PAR. A targeted temp=0.7 rescue pass can raise combined `#Corr` to `754/866`, but this is an adaptive two-stage result and should not be compared directly with paper single-pass rows.
+This reproduction shows that replacing the Quokka / InvBench inference backend with DeepSeek V4 Pro produces results competitive with the paper-reported gpt-5.2 row under official Quokka metrics. The best single-pass DeepSeek setting, temperature 0.2 with non-reasoning N=16, achieves `#Corr=703/866`, close to gpt-5.2's `710/866`, while improving short-timeout metrics (`#Ext@30s=48` vs 21, `PAR@30s=11.4s` vs 22.2s). Temperature 0.7 is not uniformly better: it improves `#Ext@30s` but reduces `#Corr` and worsens PAR. A targeted temp=0.7 rescue pass can raise combined `#Corr` to `754/866`, but this is an adaptive two-stage result and should not be compared directly with paper single-pass rows. The qualitative interpretation of `#Ext@500s=3` is more conservative than the raw number suggests: two cases are clean timeout-budget speedups, while one (`bresenham`) is a timeout/reporting artifact caused by verifier non-linear arithmetic limitations.
 
 Overall, this reproduction supports the original paper's conclusion that verifier-validated LLM invariants can improve software verification, while highlighting that model choice, sampling budget, and serving behavior materially affect the measured outcome. These results should be interpreted as a reproduction under a different inference backend and serving configuration, not as a pure model-only comparison.
