@@ -160,7 +160,43 @@ Higher temperature increases sample diversity, which can find stronger invariant
 
 ---
 
-## 9. Comparison with Baseline UAutomizer
+## 9. Benchmark Solvability and Interpretation
+
+### 9.1 Baseline Solvability
+
+InvBench should not be interpreted as a collection of benchmarks that the baseline verifier cannot solve. In our reproduction, UAutomizer solves almost all benchmarks under generous timeout budgets:
+
+| Timeout | Baseline Solved | Baseline Unsolved |
+|---:|---:|---:|
+| 30s | 748 (86.4%) | 118 (13.6%) |
+| 500s | 863 (99.7%) | **3 (0.3%)** |
+
+Only 3 of 866 benchmarks remain unsolved at 500s. The benchmark is therefore better understood as a **speedup-oriented invariant-synthesis benchmark**: most instances are eventually solvable by the baseline, but LLM-generated invariants can reduce verification time and increase the number solved under shorter timeouts.
+
+### 9.2 Implications for Metric Interpretation
+
+This solvability profile has direct implications for how the official metrics should be interpreted:
+
+- **`#Ext@30s` is the most informative metric.** With 118 baseline-unsolved cases at 30s, there is substantial room for LLM invariants to move cases below the 30s threshold. DeepSeek solves 48–59 of these (41–50% coverage).
+- **`PAR@30s` is the most meaningful speedup metric.** It captures end-to-end acceleration on the regime where most cases sit.
+- **`#Ext@500s` is bounded to at most 3.** The baseline solves nearly everything at 500s, so `#Ext@500s` can never exceed 3 regardless of LLM quality. This metric mainly reflects whether the LLM can help the very hardest cases.
+- **`PAR@500s` is dominated by slow-baseline cases** where both baseline and DeepSeek take hundreds of seconds. DeepSeek's modest PAR@500s advantage (102.0s vs 105.1s for gpt-5.2) reflects acceleration on the few very slow benchmarks.
+
+### 9.3 The Three #Ext@500s Cases
+
+DeepSeek temp=0.2 achieves `#Ext@500s=3`. Of these three:
+
+| Benchmark | Baseline | DeepSeek | Speedup | Clean? |
+|---|---:|---:|---:|:---:|
+| `prodbin-ll_valuebound50_1.c` | TRUE at 541s | TRUE at 248s | 2.2× | Yes |
+| `egcd2_2.c` | TRUE at 515s | TRUE at 6s | 88.2× | Yes |
+| `bresenham-ll_unwindbound10_2.c` | TIMEOUT at ~508s | FALSE at 6s | — | No (see §11) |
+
+The first two are clean timeout-budget speedups: the baseline solves the benchmark correctly but takes slightly over 500s, while DeepSeek's invariant reduces verification time to well within the 500s budget. The third (`bresenham`) was classified as a timeout/reporting artifact after a separate semantic audit (§11.1).
+
+This pattern supports the interpretation of InvBench as a speedup-oriented benchmark: the baseline *can* solve these cases (prodbinll and egcd2_2 are both TRUE), but LLM invariants dramatically accelerate the process.
+
+## 10. Official Quokka Metrics vs Baseline
 
 Using official metrics (temp=0.2):
 
@@ -176,7 +212,7 @@ Note: `#Ext@T` is the official timeout-dependent extension metric reported by `p
 
 ---
 
-## 10. Audited Metrics and Raw Faster Warning
+## 11. Audited Metrics and Raw Faster Warning
 
 The following audited metrics are from our analysis script applied to the temp=0.2 full run:
 
@@ -195,7 +231,7 @@ The following audited metrics are from our analysis script applied to the temp=0
 
 ---
 
-## 11. Extensions and Regressions
+## 12. Extensions and Regressions
 
 The full extension and regression lists are reported in `notes/deepseek_full_extensions.md` and `notes/deepseek_full_regressions.md`. In brief:
 
@@ -214,7 +250,7 @@ The `bresenham-ll_unwindbound10_2.c` case was audited separately because it show
 
 ---
 
-## 12. Relation to CPAchecker / CEGAR Work
+## 13. Relation to CPAchecker / CEGAR Work
 
 Our earlier CPAchecker / CEGAR experiments motivated this reproduction because they suggested that LLM predicates are highly integration-dependent. In CPAchecker, the benefit was limited to selected relational bottlenecks — the CEGAR integration constrained how effectively the LLM signal could be used.
 
@@ -222,7 +258,7 @@ This Quokka reproduction provides a complementary data point: when the pipeline 
 
 ---
 
-## 13. Limitations and Threats to Direct Comparability
+## 14. Limitations and Threats to Direct Comparability
 
 1. **Sampling budget:** DeepSeek uses N=16; gpt-5.2 row appears to use N=2. More samples increase the chance of finding good invariants.
 2. **Non-reasoning mode:** DeepSeek uses explicit thinking-disabled mode; the gpt-5.2 row uses default OpenAI client behavior (the exact mode is not documented in the paper's default configuration).
@@ -235,7 +271,7 @@ This Quokka reproduction provides a complementary data point: when the pipeline 
 
 ---
 
-## 14. Reproducibility
+## 15. Reproducibility
 
 ### temp=0.2 full run
 
@@ -282,7 +318,7 @@ python baselines/batch_invariant_generation.py \
 
 ---
 
-## 15. Conclusion
+## 16. Conclusion
 
 This reproduction shows that replacing the Quokka / InvBench inference backend with DeepSeek V4 Pro produces results competitive with the paper-reported gpt-5.2 row under official Quokka metrics. The best single-pass DeepSeek setting, temperature 0.2 with non-reasoning N=16, achieves `#Corr=703/866`, close to gpt-5.2's `710/866`, while improving short-timeout metrics (`#Ext@30s=48` vs 21, `PAR@30s=11.4s` vs 22.2s). Temperature 0.7 is not uniformly better: it improves `#Ext@30s` but reduces `#Corr` and worsens PAR. A targeted temp=0.7 rescue pass can raise combined `#Corr` to `754/866`, but this is an adaptive two-stage result and should not be compared directly with paper single-pass rows. The qualitative interpretation of `#Ext@500s=3` is more conservative than the raw number suggests: two cases are clean timeout-budget speedups, while one (`bresenham`) is a timeout/reporting artifact caused by verifier non-linear arithmetic limitations.
 
