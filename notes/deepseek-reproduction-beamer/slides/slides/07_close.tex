@@ -1,0 +1,15 @@
+\begin{frame}{結論}
+  \vspace{0.3em}
+  \begin{itemize}
+    \item Quokka + DeepSeek 跑通 \NumBenchmarks{} 題；\#Corr = \DSZCorr/\NumBenchmarks{}
+    \item 短時限 \textbf{\#Ext@30s}、PAR@30s 最有訊息
+    \item 詳細報告：\texttt{deepseek\_reproduction\_report.md}
+  \end{itemize}
+  \vfill
+  {\footnotesize\textcolor{SeriesPaper}{print\_results.py · analyze\_deepseek\_results.py}\par}
+  \note{
+    \textbf{約 30 秒}
+
+    總結：我們在 mazu 上復現了 Quokka 加 DeepSeek，single-pass 主結果 \#Corr 703 over 866，短時限指標最有故事。完整文字在 deepseek\_reproduction\_report.md。謝謝，歡迎提問。
+  }
+\end{frame}

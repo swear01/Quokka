@@ -86,7 +86,7 @@ main() → get_client() → BatchInvariantProcessor.__init__()
 - 0/8 (0%) had invariants accepted by verifier (all assume/assert results: UNKNOWN)
 - Main failure mode: reasoning model consumes all tokens on reasoning, content is empty; fallback reads reasoning trace which doesn't contain the exact required format
 - Only benchmark38 produced a complete formatted response in `content` (51 chars): `After line 28, insert assume(x == 4 * y && x >= 0);`
-- See `notes/deepseek_results.md` for full result table
+- See `notes/deepseek_smoke_snapshot.md` for smoke-run results
 
 ## Final Code Changes Summary
 
@@ -118,10 +118,9 @@ main() → get_client() → BatchInvariantProcessor.__init__()
 - `Dataset/evaluation_deepseek_smoke/` — 8 benchmark subset
 - `.env` — API key (gitignored)
 - `notes/deepseek_reproduction_notes.md`
-- `notes/deepseek_subset.md`
-- `notes/deepseek_results.md`
-- `notes/deepseek_cache_notes.md`
-- `notes/deepseek_vs_vguided_cegar.md`
+- `notes/deepseek_subset_30.md`
+- `notes/deepseek_smoke_snapshot.md`
+- `notes/deepseek_cache_schedule_probe.json`
 
 ### `tools/uautomizer/Ultimate.py` (verifier fixes)
 - **Java version**: Changed `get_java()` to find highest available Java version (previously strict ==11 check failed on both Java 8 and Java 17)

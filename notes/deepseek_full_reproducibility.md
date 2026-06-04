@@ -38,16 +38,17 @@ No `--max_new_tokens` — omitted entirely, DeepSeek receives no max_tokens limi
 - Spec: unreach-call.prp
 
 ## Result
-- Directory: baselines/results/deepseek_v4pro_nonreasoning_n16_full_20260530_015014/
-- File: deepseek-v4-pro_cot=False_best_of_n=16_num_shots=0_temperature=0.2_verifier=uautomizer_invariant_generation_results.json
-- SHA256: 9c24537ab6216dfd0af7497e6f4dd6c17009574d41171884f472727ab8409926
+- temp=0.2 directory: `baselines/results/deepseek_v4pro_nonreasoning_n16_full_20260530_015014/`
+- temp=0.2 file: `deepseek-v4-pro_cot=False_best_of_n=16_num_shots=0_temperature=0.2_verifier=uautomizer_invariant_generation_results.json`
+- temp=0.2 SHA256: `9c24537ab6216dfd0af7497e6f4dd6c17009574d41171884f472727ab8409926`
+- temp=0.7 directory: `baselines/results/deepseek_v4pro_nonreasoning_n16_temp07_full_20260530_211946/`（對照 run，見主報告）
 
 ## Analysis
-- Script: scripts/analyze_deepseek_results.py
+- Official metrics: `python baselines/print_results.py <result_dir> --timeouts 30 500`
+- Extension audit: `python baselines/print_results.py <result_dir> --list-ext --timeouts 30 500`
+- Audited categories: `python scripts/analyze_deepseek_results.py <result.json> --timeouts 30 500`
 - 866 benchmarks processed
-- 703/866 #Corr
-- 638/866 first-correct real improvements
-- 11 extensions
+- 703/866 #Corr (re-run scripts above to refresh audited breakdown after code updates)
 
 ## Infra Fixes Applied
 1. Java 17 found in /tmp/, symlinked to tools/jvm/bin/java

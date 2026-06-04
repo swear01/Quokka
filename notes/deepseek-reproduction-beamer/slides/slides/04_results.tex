@@ -1,0 +1,26 @@
+\begin{frame}{官方結果（single-pass）}
+  \vspace{-0.35em}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.52\textwidth}
+    \footnotesize
+    \begin{tabular}{@{}lrrr@{}}
+      \toprule
+      設定 & \#Corr & \#Ext@30s & PAR@30s \\
+      \midrule
+      論文參考 & \PaperCorr & \PaperExtThirty & \PaperParThirty s \\
+      \textbf{DS t=0.2} & \textbf{\DSZCorr} & \textbf{\DSZExtThirty} & \textbf{\DSZParThirty s} \\
+      DS t=0.7 & \DSvCorr & \DSvExtThirty & \DSvParThirty s \\
+      \bottomrule
+    \end{tabular}
+    \column{0.46\textwidth}
+    \centering
+    \input{figures/ext_thirty_bar.tex}
+  \end{columns}
+  \vspace{0.3em}
+  {\footnotesize\textcolor{SeriesPaper}{主設定 t=0.2 · 不宣稱勝負}\par}
+  \note{
+    \textbf{約 60 秒}
+
+    主設定是 temp 0.2：\#Corr 703，和論文參考 710 接近；\#Ext 在 30 秒是 48，論文參考是 21；PAR 在 30 秒也明顯較低。0.7 那次 \#Ext@30s 更高但 \#Corr 更低，說明 temperature 不是愈高愈好。這些都是 print\_results.py 的 official 定義，我們不把它講成打贏論文。
+  }
+\end{frame}

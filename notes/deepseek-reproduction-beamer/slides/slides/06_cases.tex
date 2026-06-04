@@ -1,0 +1,20 @@
+\begin{frame}{\#Ext@500s 三題}
+  \vspace{-0.35em}
+  \footnotesize
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    題目 & Baseline & DeepSeek & 質性 \\
+    \midrule
+    prodbin-ll & 541s & 248s \checkmark & 成功 \\
+    egcd2\_2 & 515s & 6s \checkmark & 成功 \\
+    bresenham & FALSE 508s & assume$\times$ & \textcolor{SeriesWarn}{artifact} \\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.5em}
+  {\footnotesize\textcolor{SeriesPaper}{官方計數 3 題 · 質性成功 2 題 · 非線性算術 + 未證不變式}\par}
+  \note{
+    \textbf{約 75 秒}
+
+    三題裡 prodbin 和 egcd2 是乾淨案例：baseline 超過 500 秒才解出，DeepSeek 用對的不變式把時間壓下來。bresenham 會進官方 \#Ext@500s，但質性上不該當成功：baseline 是非線性 timeout，DeepSeek assert 通過但 assume 沒過，等於在未證的不變式下證 assertion。所以對外要說：官方 3 題，質性成功 2 題。
+  }
+\end{frame}

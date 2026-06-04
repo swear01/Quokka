@@ -1,0 +1,50 @@
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -179,6 +179,18 @@
+ 
+ `pdflatex` without `fontspec` is only OK for English-only decks with limited Unicode.
+ 
++### CJK fonts without sudo
++
++Install Noto Sans CJK OTF files under `~/.local/share/fonts` (no root):
++
++```bash
++bash ~/.cursor/skills/latex-beamer-slides/scripts/install-cjk-fonts-user.sh TC   # TW/traditional
++bash ~/.cursor/skills/latex-beamer-slides/scripts/install-cjk-fonts-user.sh SC   # simplified
++```
++
++Then in `preamble.tex` with `ctexbeamer` or `fontspec`, point `Path` at the install directory and use the `.otf` basenames (see [reference.md](reference.md) CJK block).
++
+ ## Figure-first slide patterns
+ 
+ | Pattern | `figures/` | Slide keywords (example) |
+--- a/reference.md
++++ b/reference.md
+@@ -49,12 +49,24 @@
+ 
+ ## preamble.tex — CJK (use when user requests 中文/日文/韓文)
+ 
++Install fonts without sudo: `bash ~/.cursor/skills/latex-beamer-slides/scripts/install-cjk-fonts-user.sh TC` (or `SC`).
++
+ ```latex
+ \usepackage{fontspec}
+-% Pick one family matching the talk locale:
+-\setmainfont{Noto Sans CJK TC}[BoldFont = Noto Sans CJK TC Bold]
+-\setsansfont{Noto Sans CJK TC}[BoldFont = Noto Sans CJK TC Bold]
+-% SC: Noto Sans CJK SC · JP: Noto Sans CJK JP
++% User-local Noto OTF (after install-cjk-fonts-user.sh TC):
++\newcommand{\CJKFontDir}{/home/USER/.local/share/fonts/noto-sans-cjk-tc/}
++\setCJKmainfont{NotoSansCJKtc-Regular}[
++  Path=\CJKFontDir,
++  Extension=.otf,
++  BoldFont=NotoSansCJKtc-Bold,
++]
++\setsansfont{NotoSansCJKtc-Regular}[
++  Path=\CJKFontDir,
++  Extension=.otf,
++  BoldFont=NotoSansCJKtc-Bold,
++]
++% SC: noto-sans-cjk-sc/ + NotoSansCJKsc-Regular/Bold
+ 
+ \usepackage{booktabs,amsmath}
+ \usepackage{tikz}

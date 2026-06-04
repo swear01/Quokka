@@ -1,0 +1,22 @@
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.88\linewidth,
+  height=4.2cm,
+  xbar,
+  xmin=0,
+  xmax=65,
+  ytick={1,2,3},
+  yticklabels={論文參考,DS t=0.2,DS t=0.7},
+  nodes near coords,
+  nodes near coords align={horizontal},
+  bar width=10pt,
+  enlarge y limits=0.25,
+  xlabel={\#Ext@30s},
+]
+\addplot[fill=SeriesDS] coordinates {
+  (\PaperExtThirty,1)
+  (\DSZExtThirty,2)
+  (\DSvExtThirty,3)
+};
+\end{axis}
+\end{tikzpicture}

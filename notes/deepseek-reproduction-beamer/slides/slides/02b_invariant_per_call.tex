@@ -1,0 +1,17 @@
+\begin{frame}{一次 LLM 呼叫 $\leftrightarrow$ 一個 loop}
+  \vspace{-0.2em}
+  \small
+  \begin{enumerate}
+    \item 先掃 \texttt{while/for/do}：每個 loop 一個插入點 $\rightarrow$ \texttt{\{POINTS\}}
+    \item \textbf{一次 API}：prompt 要求只輸出 \textbf{一條} \texttt{assume(...)}
+    \item \textbf{哪個 loop？} 模型從 \texttt{\{POINTS\}} \textbf{自選}一行（非每 loop 各 call）
+    \item Best-of-\BestOfN{}：\BestOfN{} 次獨立呼叫；每次仍 1 條，\textbf{不保證}覆蓋所有 loop
+  \end{enumerate}
+  \vspace{0.4em}
+  {\footnotesize\textcolor{SeriesPaper}{多 loop 題（如 egcd2）的 \#Corr 受「是否抽到關鍵 loop」影響}\par}
+  \note{
+    \textbf{約 40 秒}
+
+    常被問：一次 LLM call 幾個 invariant？答案是設計上只有一個。流程是先對程式裡每個迴圈算出合法插入點，全部列在 prompt 的 POINTS 裡，例如 After line 24、After line 37。但模型被要求 choose one of the points，只輸出一條 assume。後處理若解析到多條也只留第一條合法的。驗證時只在那個行號後插一條 assume，所以這次 sample 只加強被選到的那一個 loop。best-of-N 等於 16 是 16 次獨立 API，不是一次回 16 條；可能 16 次都選同一個 loop，也可能分散，沒有保證每個 loop 都被覆蓋。這是 Quokka artifact 既有設計，不是 DeepSeek 特有的。
+  }
+\end{frame}

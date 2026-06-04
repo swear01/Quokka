@@ -1,6 +1,7 @@
-# DeepSeek Full Run — Regressions (48 cases)
+# Regressions（48 題）
 
-Baseline solved (TRUE) but DeepSeek generated no verifier-accepted invariant (no assert=TRUE).
+Baseline `result=TRUE`，但 DeepSeek 無任一 sample 的 assert=TRUE。  
+主報告：[`deepseek_reproduction_report.md`](deepseek_reproduction_report.md) §4–§5。
 
 ## Categorization
 

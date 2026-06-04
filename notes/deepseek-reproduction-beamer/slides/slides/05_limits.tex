@@ -1,0 +1,31 @@
+\begin{frame}{Testcase 限制}
+  \vspace{-0.3em}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.48\textwidth}
+    \footnotesize
+    \textbf{加速基準}
+    \begin{tabular}{@{}lrr@{}}
+      \toprule
+      Timeout & 解出 & 未解 \\
+      \midrule
+      30s & \BaseSolvThirty & \BaseUnsolvThirty \\
+      500s & \BaseSolvFiveHundred & \BaseUnsolvFiveHundred \\
+      \bottomrule
+    \end{tabular}
+    \column{0.50\textwidth}
+    \footnotesize
+    \textbf{勿混用}
+    \begin{itemize}
+      \item \#Ext@30s 有鑑別力
+      \item \#Ext@500s $\leq$ \BaseUnsolvFiveHundred{}
+      \item FALSE 可能是 timeout 標籤
+      \item semantic\_extension $\neq$ \#Ext@T
+      \item 一次 sample 只插一個 loop
+    \end{itemize}
+  \end{columns}
+  \note{
+    \textbf{約 45 秒}
+
+    讀數字前要先理解 benchmark：在 500 秒內 baseline 只剩 3 題沒解，所以 \#Ext@500s 上限就是 3，鑑別力很低。真正有訊息的是 30 秒：有 118 題 baseline 沒解。另外 baseline 的 FALSE 有時是 timeout 分類，不是反例；還有 11 題 semantic extension，和官方 \#Ext 不是同一回事。還要記得 pipeline 限制：每個 sample 只在模型自選的一個 loop 插一條 assume，多 loop 題不保證每個 loop 都被抽到。
+  }
+\end{frame}

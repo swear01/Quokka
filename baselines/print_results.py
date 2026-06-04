@@ -253,7 +253,7 @@ def build_correct_results(results: Dict[str, List[Dict[str, Any]]]) -> Dict[str,
             if best_time is None or sample_time < best_time:
                 best_time = sample_time
 
-        if best_time is not None and best_time > 0:
+        if best_time is not None:
             solved_results[filename] = {
                 "filename": filename,
                 "result": "TRUE",
@@ -550,6 +550,50 @@ def print_compare_models_summary(summaries: Sequence[RunSummary], timeouts: Sequ
     print(format_table(headers, rows))
 
 
+def extension_cases_at_timeout(
+    correct_results: Dict[str, Dict[str, Any]],
+    baseline_lookup: Dict[str, Dict[str, Any]],
+    timeout: float,
+) -> List[tuple[str, Optional[float], float]]:
+    baseline_solved = solved_within_timeout(baseline_lookup, timeout)
+    model_solved = solved_within_timeout(correct_results, timeout)
+    cases: List[tuple[str, Optional[float], float]] = []
+    for filename in sorted(set(model_solved) - set(baseline_solved)):
+        baseline_time = to_float(baseline_lookup[filename].get("time_taken"))
+        cases.append((filename, baseline_time, model_solved[filename]))
+    return cases
+
+
+def print_extension_case_lists(
+    summaries: Sequence[RunSummary], timeouts: Sequence[float]
+) -> None:
+    if not summaries:
+        return
+
+    baseline_lookup = load_baseline_lookup(summaries[0].baseline_path)
+    print()
+    print("Extension cases (#Ext@T: model solved within T, baseline not)")
+    for summary in summaries:
+        print()
+        print(f"  {summary.label} ({summary.path.name})")
+        for timeout in timeouts:
+            label = format_timeout_label(timeout)
+            cases = extension_cases_at_timeout(
+                summary.correct_results, baseline_lookup, timeout
+            )
+            print(f"    #Ext@{label}: {len(cases)}")
+            for filename, baseline_time, model_time in cases:
+                baseline_display = (
+                    f"{baseline_time:.1f}s"
+                    if baseline_time is not None
+                    else "n/a"
+                )
+                print(
+                    f"      {filename}  baseline={baseline_display}  "
+                    f"model={model_time:.1f}s"
+                )
+
+
 def print_compare_models_latex(
     summaries: Sequence[RunSummary],
     timeouts: Sequence[float],
@@ -584,7 +628,7 @@ def print_compare_models_latex(
 
     sub = "    &"
     for _ in timeouts:
-        sub += " & \\#Extra & \\#Solved & $\\bar{T}$"
+        sub += " & \\#Ext & \\#Slv & $\\bar{T}$"
     sub += " \\\\"
     print(sub)
     print("    \\midrule")
@@ -656,6 +700,11 @@ def parse_args() -> argparse.Namespace:
         help="Also print a LaTeX table with the compare_models-style summary.",
     )
     parser.add_argument(
+        "--list-ext",
+        action="store_true",
+        help="List benchmark filenames counted in #Ext@T for each result file.",
+    )
+    parser.add_argument(
         "--caption",
         type=str,
         default=(
@@ -685,6 +734,9 @@ def main() -> None:
     ]
 
     print_compare_models_summary(summaries, timeouts)
+
+    if args.list_ext:
+        print_extension_case_lists(summaries, timeouts)
 
     if args.latex:
         print_compare_models_latex(summaries, timeouts, args.caption, args.label)

@@ -25,7 +25,7 @@ Queried `Dataset/timing_uautomizer.json` for difficult benchmarks (UNKNOWN/TIMEO
 |---|---:|---:|---:|---:|---|
 | 1 | prodbin-ll_valuebound50_1.c | TRUE | 541s | scalar (long long) | Binary product, very slow |
 | 2 | egcd2_2.c | TRUE | 515s | scalar | Extended GCD variant |
-| 3 | bresenham-ll_unwindbound10_2.c | FALSE | 508s | scalar (long long) | Bresenham line, FALSE result |
+| 3 | bresenham-ll_unwindbound10_2.c | FALSE | 508s | scalar (long long) | Bresenham; FALSE = verifier timeout artifact (see bresenham audit) |
 
 ### Group B: Slow TRUE (15)
 

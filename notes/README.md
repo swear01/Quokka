@@ -1,35 +1,29 @@
-# Notes Index
+# DeepSeek 復現 — 文件
 
-## Main Reports (start here)
-| File | Description |
-|---|---|
-| `reproduction_report.md` | Full reproduction report (15 sections) |
-| `reproduction_report_short.md` | 1-page summary |
+## 報告
 
-## Results & Metrics
-| File | Description |
-|---|---|
-| `final_metric_comparison.md` | DeepSeek vs gpt-5.2 official metric table |
-| `baseline_unsolved_counts.md` | Case study: 3 hardest benchmarks rescued |
-| `full_extensions.md` | 11 extensions (baseline→solved) |
-| `full_regressions.md` | 48 regressions (baseline solved→rejected) |
-| `rescue_combined_summary.md` | Adaptive two-stage rescue result (754/866) |
+**[`deepseek_reproduction_report.md`](deepseek_reproduction_report.md)** — 方法、改動、結果、testcase 限制、case studies、重現指令。
 
-## Reproducibility
-| File | Description |
-|---|---|
-| `full_reproducibility.md` | Exact commands, SHA256, environment |
-| `reproduction_notes.md` | Engineering notes: code changes, API fixes |
+**口頭簡報（約 5 分鐘，Beamer）**：[`deepseek-reproduction-beamer/slides/`](deepseek-reproduction-beamer/slides/) — 投影片與 `\note{}` 講稿同一套 TeX，`./build.sh` 出 PDF
 
-## Benchmarks
-| File | Description |
-|---|---|
-| `subset_30.md` | Easy-30 benchmark selection & baselines |
-| `hard30_selection.md` | Hard-30 benchmark selection & baselines |
-| `smoke_snapshot.md` | 8-case smoke test results |
+## 附錄清單
 
-## API Probes
-| File | Description |
+| 檔案 | 內容 |
 |---|---|
-| `n3_probe.md` + `.json` | DeepSeek n=3 API probe (unsupported) |
-| `cache_schedule_probe.json` | Cache priming schedule benchmark data |
+| [`deepseek_full_extensions.md`](deepseek_full_extensions.md) | 11 題 semantic_extension |
+| [`deepseek_full_regressions.md`](deepseek_full_regressions.md) | 48 題 regression |
+
+## 工程
+
+| 檔案 | 內容 |
+|---|---|
+| [`deepseek_full_reproducibility.md`](deepseek_full_reproducibility.md) | 指令、SHA、環境 |
+| [`deepseek_reproduction_notes.md`](deepseek_reproduction_notes.md) | 程式修改日誌 |
+| `deepseek_subset_30.md` / `deepseek_hard30_selection.md` / `smoke_snapshot.md` / `n3_probe.md` | 子集實驗 |
+
+## 分析
+
+```bash
+python baselines/print_results.py <result_dir> --timeouts 30 500 --list-ext
+python scripts/analyze_deepseek_results.py <result.json> --timeouts 30 500
+```

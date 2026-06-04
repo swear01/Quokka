@@ -1,0 +1,22 @@
+\begin{frame}{本次復現改動}
+  \vspace{-0.3em}
+  \small
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    項目 & 設定 \\
+    \midrule
+    後端 & DeepSeek V4 Pro \\
+    Best-of-N & \BestOfN{}（API 僅 n=1） \\
+    排程 & one\_prime\_parallel \\
+    Temperature & 0.2 主 · 0.7 對照 \\
+    Reasoning & off \\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.6em}
+  {\footnotesize\textcolor{SeriesPaper}{復現目標：跑通 artifact · 非嚴格模型對照 · 未重跑 gpt-5.2}\par}
+  \note{
+    \textbf{約 50 秒}
+
+    我們換的是工程與後端：DeepSeek、best-of-N 等於 16，因為 API 只支援 n 等於 1，所以是 16 次獨立呼叫，搭配 one prime parallel 排程。主實驗 temperature 0.2，另外完整跑了一次 0.7 當對照。Reasoning 關掉，環境從 conda 改成 venv，並修了 Java 17 和 OSGi。這是復現 DeepSeek 能否跑通 artifact，不是嚴格的模型替換實驗，也沒有重跑 gpt-5.2。
+  }
+\end{frame}

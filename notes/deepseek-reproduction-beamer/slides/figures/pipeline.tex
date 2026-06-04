@@ -1,0 +1,13 @@
+\begin{tikzpicture}[
+  node distance=0.55cm and 0.9cm,
+  box/.style={draw=Accent, rounded corners=2pt, minimum height=0.75cm,
+    minimum width=2.1cm, align=center, font=\TikzCJKFont},
+  arr/.style={-{Stealth[length=2mm]}, thick, Accent}
+]
+  \node[box] (p) {程式\\迴圈點};
+  \node[box, right=of p] (l) {LLM\\assume};
+  \node[box, right=of l] (a) {assume\\驗證};
+  \node[box, right=of a] (b) {assert\\驗證};
+  \node[box, right=of b] (m) {\#Corr\\\#Ext@T};
+  \draw[arr] (p) -- (l) -- (a) -- (b) -- (m);
+\end{tikzpicture}

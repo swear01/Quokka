@@ -1,6 +1,8 @@
-# DeepSeek Full Run — Extensions (Baseline Unsolved → Solved)
+# Semantic Extensions（11 題）
 
-## 11 cases where DeepSeek invariant changed outcome from FALSE/UNKNOWN to verifier-accepted
+**≠ 官方 `#Ext@T`。** 見主報告 [`deepseek_reproduction_report.md`](deepseek_reproduction_report.md) §4.2、§5 Case D。
+
+Baseline **result ≠ TRUE**，但至少一 sample **assert=TRUE**（`scripts/analyze_deepseek_results.py` 的 `semantic_extension`）。
 
 | # | Benchmark | Baseline | Baseline Time | First Correct Sample | DeepSeek E2E | Invariant |
 |---:|---:|---:|---:|---:|---:|---|

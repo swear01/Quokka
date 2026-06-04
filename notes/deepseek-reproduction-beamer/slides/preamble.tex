@@ -1,0 +1,68 @@
+\usepackage{fontspec}
+\usepackage{booktabs,amsmath,amssymb}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+% Noto Sans CJK TC: ~/.local/share/fonts/noto-sans-cjk-tc/*.otf (build.sh installs/extracts)
+\newcommand{\CJKFontDir}{/home/swear01/.local/share/fonts/noto-sans-cjk-tc/}
+\newcommand{\CJKFontRegularOTF}{\CJKFontDir NotoSansCJKtc-Regular.otf}
+\IfFileExists{\CJKFontRegularOTF}{%
+  \setCJKmainfont{NotoSansCJKtc-Regular}[
+    Path=\CJKFontDir,
+    Extension=.otf,
+    BoldFont=NotoSansCJKtc-Bold,
+  ]
+  \setCJKsansfont{NotoSansCJKtc-Regular}[
+    Path=\CJKFontDir,
+    Extension=.otf,
+    BoldFont=NotoSansCJKtc-Bold,
+  ]
+  \setsansfont{NotoSansCJKtc-Regular}[
+    Path=\CJKFontDir,
+    Extension=.otf,
+    BoldFont=NotoSansCJKtc-Bold,
+  ]
+}{%
+  \setCJKmainfont{Noto Sans CJK TC}[
+    BoldFont={Noto Sans CJK TC Bold},
+  ]
+  \setCJKsansfont{Noto Sans CJK TC}[
+    BoldFont={Noto Sans CJK TC Bold},
+  ]
+  \setsansfont{Noto Sans CJK TC}[
+    BoldFont={Noto Sans CJK TC Bold},
+  ]
+}
+% TikZ / pgfplots: explicit Noto (beamer sans can still pick FandolHei without fontset=none)
+\IfFileExists{\CJKFontRegularOTF}{%
+  \newfontfamily\NotoSansTC{NotoSansCJKtc-Regular}[
+    Path=\CJKFontDir,
+    Extension=.otf,
+    BoldFont=NotoSansCJKtc-Bold,
+  ]
+}{%
+  \newfontfamily\NotoSansTC{Noto Sans CJK TC}[
+    BoldFont={Noto Sans CJK TC Bold},
+  ]
+}
+\newcommand{\TikzCJKFont}{\NotoSansTC\footnotesize}
+\tikzset{every node/.append style={font=\TikzCJKFont}}
+\pgfplotsset{
+  tick label style={font=\TikzCJKFont},
+  label style={font=\TikzCJKFont},
+}
+
+\definecolor{Accent}{HTML}{1B4965}
+\definecolor{SeriesPaper}{HTML}{6C757D}
+\definecolor{SeriesDS}{HTML}{2E86AB}
+\definecolor{SeriesWarn}{HTML}{E07A2F}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{%
+  \hfill\footnotesize\insertframenumber/\inserttotalframenumber\hspace{1em}}
+
+% \setbeameroption{show notes on second screen=right}
+
+\input{metadata.tex}

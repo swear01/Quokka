@@ -1,325 +1,183 @@
-# Reproducing Quokka / InvBench with DeepSeek V4 Pro
+# Quokka / InvBench 重現報告（DeepSeek V4 Pro）
 
-**A model-substitution reproduction and comparison with the reported gpt-5.2 row**
+**最後修訂：** 2026-06-04（§2.1.1：一次 LLM 呼叫只產一個 invariant、針對哪個 loop）
 
----
-
-## 1. Executive Summary
-
-We reproduced the Quokka / InvBench artifact for LLM-based loop invariant synthesis using DeepSeek V4 Pro as the inference backend in place of the original model APIs. The artifact uses UAutomizer to validate LLM-generated loop invariants on 866 benchmarks derived from SV-COMP.
-
-**In this reproduction, the best single-pass DeepSeek setting (non-reasoning, temperature 0.2, N=16) achieves results competitive with the paper-reported gpt-5.2 row under official Quokka metrics:**
-
-| Metric | gpt-5.2 (paper) | DeepSeek temp=0.2 (this reproduction) |
-|---|---:|---:|
-| `#Corr` | 710 | 703 |
-| `#Ext@30s` | 21 | 48 |
-| `PAR@30s` | 22.2s | 11.4s |
-| `#Ext@500s` | 1 | 3 |
-| `PAR@500s` | 105.1s | 102.0s |
-
-DeepSeek is close on `#Corr` (−1%), substantially better on short-timeout metrics (`#Ext@30s`: 48 vs 21, `PAR@30s`: 11.4s vs 22.2s), and roughly tied at the 500s timeout. One of the three `#Ext@500s` cases was later classified as a timeout/reporting artifact (`bresenham`) and is not used as a qualitative success example. Temperature 0.7 is not uniformly better: it improves `#Ext@30s` to 59 but reduces `#Corr` to 691 and worsens PAR. An adaptive two-stage pass (temp=0.2 full run + targeted temp=0.7 rescue on previously failed cases) raises combined `#Corr` to 754/866, but this is not a single-pass comparison.
-
-**This comparison is not model-only.** The paper's gpt-5.2 row appears to use N=2, while our DeepSeek runs use N=16 with cache-aware separate calls and explicit non-reasoning mode. Sampling budget, temperature, and serving behavior all affect the measured outcome.
+在 Quokka artifact 上將推論後端換成 DeepSeek V4 Pro 並跑通全基準。論文 **gpt-5.2 列僅作文獻對照**（本機未重跑 gpt-5.2，API 成本過高）。
 
 ---
 
-## 2. What Was Reproduced
+## 1. 結果一覽
 
-**Original target:** Quokka / InvBench (Wei et al., 2025/2026), an evaluation-oriented framework for LLM-based loop invariant synthesis. The artifact generates loop invariants with an LLM, inserts them into C programs, and validates them with the UAutomizer verifier. Soundness comes from verifier validation, not from trusting the LLM.
-
-**What we used:**
-- The same benchmark suite: `Dataset/evaluation_all`, 866 benchmarks
-- The same verification pipeline: UAutomizer with assume/assert queries
-- The same official metrics: `print_results.py` computing `#Corr`, `#Ext@T`, `#Slv@T`, `PAR@T`
-
-**What we changed:** Replaced the inference backend with DeepSeek V4 Pro, adapted the environment from conda to Python venv, and added necessary engineering adaptations for compatibility.
-
----
-
-## 3. How This Reproduction Differs from the Original Artifact
-
-| Aspect | Original paper / artifact | This reproduction |
-|---|---|---|
-| Model | Reported best row: gpt-5.2 | DeepSeek V4 Pro |
-| Best-of-N | gpt-5.2 row appears to use N=2 | N=16 |
-| Temperature | gpt-5.2 row appears to use 0.7 | 0.2 and 0.7 (separate runs) |
-| Max tokens | gpt-5.2 row appears to use max_new_tokens=200 | Omitted (provider default) |
-| Reasoning mode | Default OpenAI client behavior | Explicit non-reasoning (`thinking=disabled`) |
-| API `n` parameter | Original OpenAI client setting | DeepSeek rejects `n>1`; we use separate `n=1` calls |
-| Serving / cache | Original artifact behavior | Separate calls with observed provider prompt cache |
-| Verifier | UAutomizer | Same verifier, with Java 17/OSGi fixes |
-| Environment | conda / original dependencies | Python venv / lazy imports |
-
-Because these settings differ, **this is not a pure model-only comparison.** It is a reproduction using the Quokka artifact with DeepSeek substituted as the inference backend, with settings adapted to DeepSeek's API behavior.
-
----
-
-## 4. Engineering Adaptations
-
-The following adaptations were required to run the artifact with DeepSeek V4 Pro.
-
-### 4.1 DeepSeek API Client (`baselines/inference.py`)
-
-Added `DeepSeekClient` using OpenAI-compatible endpoint (`https://api.deepseek.com`):
-- Reads `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL` from environment
-- Supports non-reasoning mode via `extra_body={"thinking": {"type": "disabled"}}`
-- Does not send `max_tokens` unless `--max_new_tokens` is explicitly passed
-- Logs generation time, token usage, and cache hit/miss per call
-
-### 4.2 Best-of-N via Separate Calls
-
-DeepSeek does not support request-side `n>1`. Our API probe returned:
-```
-400: Invalid n value (currently only n = 1 is supported)
-```
-Therefore `best_of_n=16` is implemented as 16 separate `n=1` API calls. A one-prime-parallel schedule is used: sample 1 runs sequentially (cold call), samples 2–16 run in parallel. This is an implementation adaptation for DeepSeek's API limitation, not an algorithmic contribution.
-
-### 4.3 Environment and Verifier Fixes
-
-- Python venv instead of conda; heavy ML imports (torch, sglang, transformers) made lazy
-- Java 17 compatibility (`--add-opens java.base/java.lang=ALL-UNNAMED`)
-- UAutomizer OSGi cache fix (removed corrupted `-Dosgi.configuration.area`)
-- `.env` for API key (gitignored)
-
-### 4.4 Analysis Script (`scripts/analyze_deepseek_results.py`)
-
-Added a reusable analysis script that computes audited helper metrics and explicitly labels raw E2E faster as misleading. It outputs table, CSV, or JSON.
-
-### 4.5 Pipeline Arguments (`baselines/batch_invariant_generation.py`)
-
-Added `--benchmark_dir`, `--reasoning_mode`, `--bon_schedule`, `--bon_parallelism`, `--output_dir`, `--resume`. Changed `--max_new_tokens` default to `None`.
-
----
-
-## 5. Metrics
-
-**Official Quokka metrics** (from `print_results.py`):
-
-| Metric | Definition |
-|---|---|
-| `#Corr` | Benchmarks with ≥1 verifier-confirmed invariant (assert=TRUE) |
-| `#Ext@T` | Benchmarks solved by Quokka within timeout T that the baseline does not solve within the same timeout T |
-| `#Slv@T` | Benchmarks solved by Quokka within timeout T |
-| `PAR@T` | Penalized average runtime under timeout T (includes LLM generation time) |
-
-**Audited helper metrics** (from our analysis script):
-
-| Metric | Definition |
-|---|---|
-| First-correct real improvement | First assert=TRUE sample has E2E time < 95% baseline |
-| Fastest-correct real improvement | At least one assert=TRUE sample with E2E faster than baseline |
-| Raw E2E faster | DeepSeek path faster regardless of correctness. **Misleading, not improvement.** |
-
----
-
-## 6. Single-Pass Official Results
-
-| Setting | `#Corr` | `#Ext@30s` | `PAR@30s` | `#Ext@500s` | `PAR@500s` |
+| 設定 | `#Corr` | `#Ext@30s` | `PAR@30s` | `#Ext@500s` | `PAR@500s` |
 |---|---:|---:|---:|---:|---:|
-| gpt-5.2 (paper best) | 710 | 21 | 22.2s | 1 | 105.1s |
+| gpt-5.2（論文參考列） | 710 | 21 | 22.2s | 1 | 105.1s |
 | DeepSeek temp=0.2 | 703 | 48 | 11.4s | 3 | 102.0s |
 | DeepSeek temp=0.7 | 691 | 59 | 13.1s | 3 | 111.6s |
 
-**Interpretation:**
+- **主設定：temp=0.2**（本復現 single-pass 結果）。
+- **temp=0.7**：另一次完整 single-pass（較高 `#Ext@30s`、較低 `#Corr`），僅作 temperature 對照。
+- 論文列僅參考，**不宣稱勝負**；差異含後端、N、temperature、環境。
 
-- **temp=0.2 is the best single-pass DeepSeek setting.** It nearly matches gpt-5.2 on `#Corr` (703 vs 710, −1%) and substantially improves short-timeout metrics (`#Ext@30s`: 48 vs 21, `PAR@30s`: 11.4s vs 22.2s). At the 500s timeout, the two settings are roughly tied.
-- **temp=0.7 is not uniformly better.** It achieves the highest `#Ext@30s` (59) but has lower `#Corr` (691) and worse PAR than temp=0.2.
-- The comparison is not model-only. Sampling budget (N=16 vs N=2), temperature, non-reasoning mode, and serving behavior all differ.
-
----
-
-## 7. Adaptive Two-Stage Result
-
-This result is separate from the single-pass official rows.
-
-| Setting | `#Corr` | Notes |
-|---|---:|---|
-| DeepSeek temp=0.2 single-pass | 703/866 | Main single-pass reproduction setting |
-| DeepSeek temp=0.2 + targeted temp=0.7 rescue | 754/866 | Adaptive two-stage; not directly comparable to paper single-pass rows |
-| gpt-5.2 (paper best) | 710/866 | Paper-reported single-pass row |
-
-**Method:** The temp=0.2 run had 163 non-`#Corr` cases. Of these, 114 were baseline-TRUE and considered rescue-worthy (the remaining 49 were excluded because their baseline status was FALSE or otherwise unsuitable for straightforward rescue; these require separate semantic inspection). Running temp=0.7 on those 114 cases rescued 51. Combined `#Corr` = 703 + 51 = 754/866.
-
-**This exceeds gpt-5.2's `#Corr` by 44 cases, but it is an adaptive two-stage result and should not be compared with the paper's single-pass rows.** Official PAR/Ext metrics for the two-stage approach would need to account for the cost of the rescue pass.
+補充（`#Slv@T`，temp=0.2 / 0.7）：`#Slv@30s` 676 / 653；`#Slv@500s` 703 / 691。
 
 ---
 
-## 8. Temperature Analysis
+## 2. 原始 Quokka 方法 vs 本次改動
 
-Temperature is not monotonic in this reproduction:
+### 2.1 原始流程（artifact，演算法未改）
 
-| Metric | temp=0.2 | temp=0.7 | Delta |
-|---:|---:|---:|---|
-| `#Corr` | 703 | 691 | −12 |
-| `#Ext@30s` | 48 | 59 | +11 |
-| `PAR@30s` | 11.4s | 13.1s | +1.7s |
-| `PAR@500s` | 102.0s | 111.6s | +9.6s |
+1. **Prompt**：`prompt.yaml` + 帶行號程式 + 所有迴圈插入點 `{POINTS}`。
+2. **LLM**：產生 **一條** `After line X, insert assume(...)`（見 §2.1.1）。
+3. **Best-of-N**：N 次獨立 LLM 呼叫，每次仍是一條不變式，各自插入後驗證。
+4. **驗證**（UAutomizer）：**assume**（不變式可證）→ **assert**（在假設下原 assertion 可證）。
+5. **彙總**：至少一 sample 的 assert=TRUE → 計入 `#Corr`。
+6. **指標**：對 `Dataset/timing_uautomizer.json` 用 `print_results.py` 算 `#Corr`、`#Ext@T`、`PAR@T`。
 
-Higher temperature increases sample diversity, which can find stronger invariants (more `#Ext@30s`) but also generates more wrong or unusable invariants (lower `#Corr`, higher PAR). temp=0.2 is the best single-pass setting for correctness. temp=0.7 is useful as a targeted rescue distribution for cases that temp=0.2 could not solve.
+### 2.1.1 一次 LLM 呼叫與哪個 loop
 
----
-
-## 9. Benchmark Solvability and Interpretation
-
-### 9.1 Baseline Solvability
-
-InvBench should not be interpreted as a collection of benchmarks that the baseline verifier cannot solve. In our reproduction, UAutomizer solves almost all benchmarks under generous timeout budgets:
-
-| Timeout | Baseline Solved | Baseline Unsolved |
-|---:|---:|---:|
-| 30s | 748 (86.4%) | 118 (13.6%) |
-| 500s | 863 (99.7%) | **3 (0.3%)** |
-
-Only 3 of 866 benchmarks remain unsolved at 500s. The benchmark is therefore better understood as a **speedup-oriented invariant-synthesis benchmark**: most instances are eventually solvable by the baseline, but LLM-generated invariants can reduce verification time and increase the number solved under shorter timeouts.
-
-### 9.2 Implications for Metric Interpretation
-
-This solvability profile has direct implications for how the official metrics should be interpreted:
-
-- **`#Ext@30s` is the most informative metric.** With 118 baseline-unsolved cases at 30s, there is substantial room for LLM invariants to move cases below the 30s threshold. DeepSeek solves 48–59 of these (41–50% coverage).
-- **`PAR@30s` is the most meaningful speedup metric.** It captures end-to-end acceleration on the regime where most cases sit.
-- **`#Ext@500s` is bounded to at most 3.** The baseline solves nearly everything at 500s, so `#Ext@500s` can never exceed 3 regardless of LLM quality. This metric mainly reflects whether the LLM can help the very hardest cases.
-- **`PAR@500s` is dominated by slow-baseline cases** where both baseline and DeepSeek take hundreds of seconds. DeepSeek's modest PAR@500s advantage (102.0s vs 105.1s for gpt-5.2) reflects acceleration on the few very slow benchmarks.
-
-### 9.3 The Three #Ext@500s Cases
-
-DeepSeek temp=0.2 achieves `#Ext@500s=3`. Of these three:
-
-| Benchmark | Baseline | DeepSeek | Speedup | Clean? |
-|---|---:|---:|---:|:---:|
-| `prodbin-ll_valuebound50_1.c` | TRUE at 541s | TRUE at 248s | 2.2× | Yes |
-| `egcd2_2.c` | TRUE at 515s | TRUE at 6s | 88.2× | Yes |
-| `bresenham-ll_unwindbound10_2.c` | TIMEOUT at ~508s | FALSE at 6s | — | No (see §11) |
-
-The first two are clean timeout-budget speedups: the baseline solves the benchmark correctly but takes slightly over 500s, while DeepSeek's invariant reduces verification time to well within the 500s budget. The third (`bresenham`) was classified as a timeout/reporting artifact after a separate semantic audit (§11.1).
-
-This pattern supports the interpretation of InvBench as a speedup-oriented benchmark: the baseline *can* solve these cases (prodbinll and egcd2_2 are both TRUE), but LLM invariants dramatically accelerate the process.
-
-## 10. Official Quokka Metrics vs Baseline
-
-Using official metrics (temp=0.2):
-
-- `#Ext@30s = 48`: DeepSeek solves 48 benchmarks at 30s that the baseline does not solve at 30s.
-- `#Ext@500s = 3` under the official script. Qualitatively, two of the three are clean timeout-budget speedups (`prodbin-ll_valuebound50_1.c`, `egcd2_2.c`), while the third (`bresenham-ll_unwindbound10_2.c`) is a timeout/reporting artifact caused by unsupported non-linear arithmetic in UAutomizer and an unvalidated DeepSeek invariant. Therefore, only two should be used as clean qualitative case studies.
-
-Using temp=0.7:
-
-- `#Ext@30s = 59`
-- `#Ext@500s = 3`
-
-Note: `#Ext@T` is the official timeout-dependent extension metric reported by `print_results.py`. Our audited "extensions" category (11 cases) is a separate classification based on benchmark-level baseline result changes and should not be used for official comparison.
-
----
-
-## 11. Audited Metrics and Raw Faster Warning
-
-The following audited metrics are from our analysis script applied to the temp=0.2 full run:
-
-| Metric | Value |
+| 問題 | 行為 |
 |---|---|
-| `#Corr` | 703/866 (81.2%) |
-| First-correct real improvements | 638/866 (73.7%) |
-| Fastest-correct real improvements | 658/866 (76.0%) |
-| Extensions (audited) | 11 |
-| Regressions | 48 |
-| Faster but not solved | 95 |
-| Correct but slower | 32 |
-| Raw E2E faster | 753/866 (86.9%) |
+| 一次 LLM 呼叫幾個 invariant？ | **1 個**（prompt 與後處理皆如此） |
+| 哪個 loop？ | **模型從候選插入點中自選一個** |
+| 多 loop 是否全覆蓋？ | **否**；需靠 N 次抽樣碰運氣 |
 
-**Raw E2E faster (753) is not improvement.** The gap between 753 and 638 is 115 cases — benchmarks where DeepSeek was faster than baseline but the invariant was not verifier-confirmed. These fast rejections must not be counted as success. Our analysis script explicitly prevents this mistake.
+**插入點怎麼來：** `baselines/batch_invariant_generation.py` 的 `find_loop_invariant_insertion_points()` 掃描程式中每個 `while` / `for` / `do`，在**迴圈體開頭前一行**各產生一個合法點，由 `create_messages()` 全部寫入 prompt 的 `{POINTS}`，例如：
 
----
+```
+After line 24
+After line 37
+```
 
-## 12. Extensions and Regressions
+**一次呼叫產什麼：** `baselines/prompt.yaml` 要求 `Choose one of the points` 且 `only output one loop invariant`；回覆格式為單行 `After line X, insert assume(condition);`。`extract_invariants_from_response()` 可解析多條，但 `validate_invariant_insertions()` **只保留第一條**合法者（行號須在 `{POINTS}` 內、condition 不可含賦值）。驗證時 `insert_invariant_into_program()` 只在該行後插入**一條** `assume`；`_generate_llm_invariants_for_file()` 對每個 best-of-N sample 各處理一條。
 
-The full extension and regression lists are reported in `notes/deepseek_full_extensions.md` and `notes/deepseek_full_regressions.md`. In brief:
+**不是「每個 loop 各打一 API」：** 單次呼叫只加強**被選到的那一個 loop**；其餘 loop 在該 sample 不插不變式。
 
-- **11 extensions:** Benchmarks where the baseline did not solve but DeepSeek found a verifier-confirmed invariant. Cases involving baseline-FALSE require separate semantic inspection — an invariant accepted on a FALSE-baseline program may prove a different property than the original assertion.
-- **48 regressions:** Benchmarks where the baseline solved but all DeepSeek invariants were rejected. These cluster in specific families (Cohen cube `*_9` variants, extended GCD variants, power-series variants).
+**Best-of-N=16：** DeepSeek API 不支援 `n>1`，故為 **16 次獨立 LLM 呼叫**（非 1 次 call 回 16 條）。每次仍是 1 條 invariant；16 個 sample 可能都選同一 loop，也可能分散到不同 loop，**無保證覆蓋所有 loop**。多 loop 程式（如 `egcd2_2.c`）的 `#Corr` 因此也受「是否抽到關鍵 loop」影響——此為 artifact 既有設計，非本次 DeepSeek 復現特有。
 
-### Bresenham Semantic Audit
+### 2.2 本次改動
 
-The `bresenham-ll_unwindbound10_2.c` case was audited separately because it showed a baseline FALSE vs DeepSeek assert-TRUE discrepancy, and because it is one of only three `#Ext@500s` cases. The full audit is at `notes/deepseek_bresenham_semantic_audit.md`.
+| 項目 | 論文 artifact（參考） | 本復現 |
+|---|---|---|
+| 推論後端 | gpt-5.2 等 | **DeepSeek V4 Pro** |
+| Best-of-N | 論文列約 N=2 | **N=16**（16 次 n=1 呼叫 + `one_prime_parallel`） |
+| Temperature | 論文列約 0.7 | **0.2**（主）、**0.7**（對照 run） |
+| Reasoning | OpenAI 預設 | `thinking=disabled` |
+| `max_new_tokens` | 約 200 | 未傳 |
+| 環境 / verifier | conda 等 | venv；Java 17、OSGi 修正 |
+| 程式 | — | `DeepSeekClient`、`--resume`、`--bon_*` 等 |
 
-**Key findings:**
-1. The baseline `FALSE` label was caused by repeated `Unsupported non-linear arithmetic` failures in UAutomizer's CEGAR loop, not by a genuine counterexample. The verifier timed out after 49 iterations.
-2. The DeepSeek assert query (`assume(v == 2*Y*x - 2*X*y + 2*Y - X)`) returned TRUE, but the corresponding assume query returned FALSE — the verifier could not independently prove the invariant is inductive (same non-linear arithmetic limitation).
-3. An assert TRUE under an unvalidated assumption does not constitute a sound proof.
-4. **Classification:** `timeout/reporting artifact`. The case is mechanically counted in official `#Ext@500s` but is not used as a qualitative success example.
+**N=16：** DeepSeek API 不支援 n>1，故用 16 次獨立請求；配合平行排程後，**單題端到端時間並未隨 N 線性放大**（驗證時間佔比高、取樣可平行）。本復現**不另做 N=2 對照或依 N 加權**。
 
----
+**gpt-5.2：** 未在本機重跑；下表論文數字僅供對照 artifact 文獻，**不宣稱模型優劣**。
 
-## 13. Relation to CPAchecker / CEGAR Work
-
-Our earlier CPAchecker / CEGAR experiments motivated this reproduction because they suggested that LLM predicates are highly integration-dependent. In CPAchecker, the benefit was limited to selected relational bottlenecks — the CEGAR integration constrained how effectively the LLM signal could be used.
-
-This Quokka reproduction provides a complementary data point: when the pipeline is designed to directly validate standalone LLM proposals without complex post-processing, the same underlying model capability translates into broad, measurable improvement (81% `#Corr`, 74% real E2E improvement). The reproduction supports the broader hypothesis that LLMs can generate useful semantic hypotheses when the formal pipeline can validate and consume them directly.
+工程細節：`notes/deepseek_reproduction_notes.md`。
 
 ---
 
-## 14. Limitations and Threats to Direct Comparability
+## 3. 指標定義（精簡）
 
-1. **Sampling budget:** DeepSeek uses N=16; gpt-5.2 row appears to use N=2. More samples increase the chance of finding good invariants.
-2. **Non-reasoning mode:** DeepSeek uses explicit thinking-disabled mode; the gpt-5.2 row uses default OpenAI client behavior (the exact mode is not documented in the paper's default configuration).
-3. **Serving behavior:** DeepSeek prompt cache and parallel separate calls affect runtime (PAR). These differ from the original artifact's serving setup.
-4. **Temperature:** We tested both 0.2 and 0.7. The best setting depends on which metric is prioritized.
-5. **Adaptive rescue:** The two-stage 754 `#Corr` is not a single-pass result.
-6. **API variance:** Provider behavior may change over time. Exact `#Corr` may vary on re-run due to LLM nondeterminism.
-7. **No matched comparison:** We did not run DeepSeek N=2 with the paper's exact parameters.
-8. **Verifier fixes:** Java/OSGi changes may affect verifier behavior compared with the paper's original environment.
+| 名稱 | 定義 |
+|---|---|
+| `#Corr` | ≥1 sample 的 assert=TRUE |
+| `#Ext@T` | Quokka 在 T 內解出，baseline 在 T 內未解出 |
+| `semantic_extension` | baseline `result ≠ TRUE` 但有 assert=TRUE（≠ `#Ext@T`） |
+
+```bash
+python baselines/print_results.py <result_dir> --timeouts 30 500 --list-ext
+python scripts/analyze_deepseek_results.py <result.json> --timeouts 30 500
+```
 
 ---
 
-## 15. Reproducibility
+## 4. Testcase 與指標的限制
 
-### temp=0.2 full run
+### 4.1 加速基準，不是「baseline 幾乎做不出來」
+
+| Timeout | Baseline 在時限內解出 | 未解出 |
+|---:|---:|---:|
+| 30s | 748 | 118 |
+| 500s | 863 | **3** |
+
+- `#Ext@30s` 較有鑑別力；`#Ext@500s` **最多 3 題**（見 §5 Case A–C）。
+
+### 4.2 單題／指標限制
+
+| 限制 | 影響 |
+|---|---|
+| 一次 sample 只插一個 loop | 多 loop 程式靠 N 次抽樣；不保證每 loop 都有不變式 |
+| 固定 `assume` 插入格式 | 格式錯 → 無法 extraction |
+| UAutomizer 能力 | 非線性、大狀態 → FALSE/TIMEOUT 可能是工具限制 |
+| Baseline `FALSE` | 可能是 timeout 分類，非真反例（bresenham） |
+| `semantic_extension`（11 題） | 含已知 bug 題；≠ 官方 `#Ext@T` |
+
+清單：`deepseek_full_extensions.md`、`deepseek_full_regressions.md`。
+
+---
+
+## 5. Case Studies
+
+官方 `#Ext@500s=3`（temp=0.2/0.7 皆同）；質性上 **2 題**可當成功（A、B），**1 題**為計數 artifact（C）。
+
+### Case A — `prodbin-ll_valuebound50_1.c`
+
+| | Baseline | DeepSeek |
+|---|---|---|
+| 時限內 | 500s 未解（541s 才 TRUE） | 248s，assume/assert TRUE |
+
+Shift-add 乘法；迴圈內已有 `__VERIFIER_assert(z + x * y == (long long)a * b)`。DeepSeek 不變式等同將該 assertion 當 `assume`。  
+**限制：** 規格已寫在 assertion 上，考的是 **UAutomizer 合成慢**（大狀態），不是 LLM 發現未知性質。
+
+### Case B — `egcd2_2.c`
+
+| | Baseline | DeepSeek |
+|---|---|---|
+| 時限內 | 515s TRUE | ~6s，Bézout：`a == y*r + x*p`（及配對式） |
+
+**限制：** 需正確代數模板；N=16 時 3 sample 約 2 正 1 錯。同族在 full run 仍常 **regression**（見 `deepseek_full_regressions.md`）。
+
+### Case C — `bresenham-ll_unwindbound10_2.c`（`timeout_reporting_artifact`）
+
+| | Baseline | DeepSeek |
+|---|---|---|
+| timing 檔 | `FALSE`, ~508s | 頂層 FALSE ~6s |
+| 實際 | CEGAR 反覆 `Unsupported non-linear arithmetic`，無反例軌跡 | assume=FALSE；assert=TRUE（在**未證**不變式下） |
+
+與可解變體 `bresenham-ll_valuebound100_1.c` 對照：後者有 **X/Y 界** 與 **迴圈內 assertion**；本題無界 X/Y、無 loop assertion、終點含 `Y*x`/`X*y` 非線性項。
+
+**為何仍進 `#Ext@500s`：** 機械定義（baseline 500s 內未解、DeepSeek E2E≤500）。  
+**為何不算質性成功：**
+
+1. Baseline 的 FALSE 是逾時分類，不是真 counterexample。  
+2. assert=TRUE 依賴 assume 未通過的不變式 `v == 2*Y*x - 2*X*y + 2*Y - X`。  
+3. 只能說「若不變式成立則 assertion 成立」，**不是**對原程式之 sound proof。
+
+### Case D — `semantic_extension`（11 題，≠ `#Ext@T`）
+
+完整檔名：`deepseek_full_extensions.md`。
+
+- **eureka_01-1_1.c**：baseline FALSE @395s，DeepSeek assert=TRUE — 可能程式可證、baseline 找不到關係不變式。  
+- **tree_del_iter_incorrect_*.c**（4 題）：已知有 bug；assert=TRUE 不表示修復 reach_error。
+
+### `#Ext@500s` 對照
+
+| | prodbin | egcd2_2 | bresenham |
+|---|---:|---:|---:|
+| 質性成功 | 是 | 是 | 否 |
+| 根因 | 合成慢 | 多變數多項式 | 驗證器非線性限制 |
+
+---
+
+## 6. 重現指令
 
 ```bash
 source .venv/bin/activate
 python baselines/batch_invariant_generation.py \
-  --max_workers 16 \
-  --model_name deepseek-v4-pro \
-  --inference_client deepseek \
-  --reasoning_mode off \
-  --best_of_n 16 \
-  --bon_schedule one_prime_parallel \
-  --bon_parallelism 15 \
-  --temperature 0.2 \
+  --max_workers 16 --model_name deepseek-v4-pro \
+  --inference_client deepseek --reasoning_mode off \
+  --best_of_n 16 --bon_schedule one_prime_parallel \
+  --bon_parallelism 15 --temperature 0.2 \
   --benchmark_dir Dataset/evaluation_all
 ```
 
-### temp=0.7 full run
-
-```bash
-source .venv/bin/activate
-python baselines/batch_invariant_generation.py \
-  --max_workers 16 \
-  --model_name deepseek-v4-pro \
-  --inference_client deepseek \
-  --reasoning_mode off \
-  --best_of_n 16 \
-  --bon_schedule one_prime_parallel \
-  --bon_parallelism 15 \
-  --temperature 0.7 \
-  --benchmark_dir Dataset/evaluation_all
-```
-
-**Common settings:** No `--max_new_tokens` was passed. API key read from `.env` (gitignored).
-
-**Environment:** Git commit `60301cb`, Python 3.10.12 (venv), Java OpenJDK 17.0.15, Ubuntu 22.04, 125GB RAM.
-
-**Result directories:**
-- temp=0.2: `baselines/results/deepseek_v4pro_nonreasoning_n16_full_20260530_015014/`
-- temp=0.7: `baselines/results/deepseek_v4pro_nonreasoning_n16_temp07_full_20260530_211946/`
-
-**Analysis:** `scripts/analyze_deepseek_results.py`
-**Official metrics:** `python baselines/print_results.py <result_dir> --timeouts 30 500`
-
----
-
-## 16. Conclusion
-
-This reproduction shows that replacing the Quokka / InvBench inference backend with DeepSeek V4 Pro produces results competitive with the paper-reported gpt-5.2 row under official Quokka metrics. The best single-pass DeepSeek setting, temperature 0.2 with non-reasoning N=16, achieves `#Corr=703/866`, close to gpt-5.2's `710/866`, while improving short-timeout metrics (`#Ext@30s=48` vs 21, `PAR@30s=11.4s` vs 22.2s). Temperature 0.7 is not uniformly better: it improves `#Ext@30s` but reduces `#Corr` and worsens PAR. A targeted temp=0.7 rescue pass can raise combined `#Corr` to `754/866`, but this is an adaptive two-stage result and should not be compared directly with paper single-pass rows. The qualitative interpretation of `#Ext@500s=3` is more conservative than the raw number suggests: two cases are clean timeout-budget speedups, while one (`bresenham`) is a timeout/reporting artifact caused by verifier non-linear arithmetic limitations.
-
-Overall, this reproduction supports the original paper's conclusion that verifier-validated LLM invariants can improve software verification, while highlighting that model choice, sampling budget, and serving behavior materially affect the measured outcome. These results should be interpreted as a reproduction under a different inference backend and serving configuration, not as a pure model-only comparison.
+temp=0.7：同上，改 `--temperature 0.7`。  
+結果目錄與 SHA：`notes/deepseek_full_reproducibility.md`。

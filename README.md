@@ -69,6 +69,9 @@ python baselines/print_results.py baselines/results --latex
 
 # also print the detailed per-run diagnostic summary
 python baselines/print_results.py baselines/results --detailed
+
+# list benchmarks counted in #Ext@T (for audits)
+python baselines/print_results.py baselines/results --list-ext --timeouts 30 500
 ```
 
 By default it prints the compare-models table:
@@ -83,6 +86,7 @@ The baseline file is inferred from the result filename suffix `verifier=...` and
 Useful optional flags:
 
 - `--detailed`: also print the per-run diagnostic summary
+- `--list-ext`: list benchmark filenames in each `#Ext@T` set
 - `--latex`: also print a LaTeX table for the same compare-models summary
 - `--timeouts T1 T2 ...`: set the timeout cutoffs used for reporting
 - `--baseline PATH`: override the baseline JSON path

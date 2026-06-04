@@ -1,0 +1,12 @@
+\begin{frame}{Quokka 原流程（未改演算法）}
+  \vspace{-0.2em}
+  \centering
+  \input{figures/pipeline.tex}
+  \vspace{0.5em}
+  {\footnotesize\textcolor{SeriesPaper}{soundness 來自 UAutomizer · 不信 LLM 原文}\par}
+  \note{
+    \textbf{約 45 秒}
+
+    Quokka 的核心沒改：LLM 依 prompt 產生要在某一行插入的 assume 不變式；對每個 sample 做 UAutomizer 兩階段驗證，先 assume 再 assert。只要有一個 sample 的 assert 是 TRUE，這題就算進 \#Corr。指標是和 timing\_uautomizer 的 baseline 比，算 \#Ext 在 T 秒內多解了幾題、以及 PAR。重點是：正確性來自 verifier，不是相信模型原文。下一頁會說：一次 LLM 呼叫只產一條 invariant，且模型從多個 loop 插入點裡自選一個。
+  }
+\end{frame}
